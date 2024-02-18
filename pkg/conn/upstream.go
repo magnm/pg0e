@@ -80,3 +80,10 @@ func (u *UpstreamConnEntry) Send(msg pgproto3.FrontendMessage) error {
 func (u *UpstreamConnEntry) Startup(d *DownstreamConnEntry) error {
 	return handleUpstreamStartup(d, u)
 }
+
+func (u *UpstreamConnEntry) Replay(d *DownstreamConnEntry) error {
+	for _, query := range d.sessionQueries {
+		slog.Debug("replaying session query", "query", query.Query)
+	}
+	return nil
+}

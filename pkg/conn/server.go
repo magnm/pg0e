@@ -121,6 +121,13 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 				slog.Error("failed to restart upstream", "err", err.Error())
 				return
 			}
+			err = upstream.Replay(downstream)
+			if err != nil {
+				slog.Error("failed to replay upstream", "err", err.Error())
+				return
+			}
+
+			// Ready
 			s.Map(downstream, upstream)
 			go upstream.Listen()
 			downstream.Resume()
