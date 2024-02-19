@@ -12,7 +12,7 @@ import (
 )
 
 type DownstreamConnEntry struct {
-	C
+	*C
 	B              *pgproto3.Backend
 	Data           chan pgproto3.FrontendMessage
 	Parameters     map[string]string
@@ -44,7 +44,7 @@ type SessionQ struct {
 
 func NewDownstreamEntry(conn net.Conn) *DownstreamConnEntry {
 	return &DownstreamConnEntry{
-		C:              *NewConn(conn),
+		C:              NewConn(conn),
 		B:              pgproto3.NewBackend(conn, conn),
 		Data:           make(chan pgproto3.FrontendMessage, 100),
 		unpause:        make(chan bool, 1),
