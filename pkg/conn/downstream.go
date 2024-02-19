@@ -97,7 +97,9 @@ func (d *DownstreamConnEntry) SendTerminalError() error {
 	}); err != nil {
 		return err
 	}
-	return d.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
+	err := d.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
+	d.readyForQuery = true
+	return err
 }
 
 func (d *DownstreamConnEntry) Pause() {

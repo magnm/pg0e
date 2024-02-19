@@ -8,8 +8,8 @@ import (
 	"github.com/jackc/pgx/v5/pgproto3"
 )
 
-func handleRegularStartup(ds *DownstreamConnEntry, us *UpstreamConnEntry) error {
-	err := handlePostgresStartup(ds, us)
+func (s *Server) handleRegularStartup(ds *DownstreamConnEntry, us *UpstreamConnEntry) error {
+	err := handlePostgresStartup(s, ds, us)
 	if err != nil {
 		return err
 	}
@@ -122,7 +122,7 @@ func handleUpstreamStartup(ds *DownstreamConnEntry, us *UpstreamConnEntry) error
 	return nil
 }
 
-func handlePostgresStartup(ds *DownstreamConnEntry, us *UpstreamConnEntry) error {
+func handlePostgresStartup(s *Server, ds *DownstreamConnEntry, us *UpstreamConnEntry) error {
 	rStartupMsg, err := ds.B.ReceiveStartupMessage()
 	if err != nil {
 		slog.Error("failed to receive startup message", "err", err.Error())
@@ -132,6 +132,21 @@ func handlePostgresStartup(ds *DownstreamConnEntry, us *UpstreamConnEntry) error
 
 	var startupMsg *pgproto3.StartupMessage
 	switch rStartupMsg := rStartupMsg.(type) {
+	case *pgproto3.CancelRequest:
+		// Find actual upstream for the requested processId and forward request
+		if realUpstream, ok := s.upMap[rStartupMsg.ProcessID]; ok {
+			if err := us.Send(&pgproto3.CancelRequest{
+				ProcessID: realUpstream.Pid,
+				SecretKey: realUpstream.key,
+			}); err != nil {
+				slog.Error("failed to send cancel request", "err", err.Error())
+				return err
+			}
+			return ErrExpectedClose
+		} else {
+			slog.Warn("failed to find upstream for cancel request", "processId", rStartupMsg.ProcessID)
+			return ErrExpectedClose
+		}
 	case *pgproto3.StartupMessage:
 		startupMsg = rStartupMsg
 	case *pgproto3.SSLRequest:
@@ -141,7 +156,7 @@ func handlePostgresStartup(ds *DownstreamConnEntry, us *UpstreamConnEntry) error
 			return err
 		}
 		// Client should redo the startup after getting denied
-		return handlePostgresStartup(ds, us)
+		return handlePostgresStartup(s, ds, us)
 	}
 
 	// Store startup params for the downstream for later

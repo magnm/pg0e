@@ -46,7 +46,7 @@ func (u *UpstreamConnEntry) Listen() {
 		switch msg := msg.(type) {
 		case *pgproto3.ErrorResponse:
 			if msg.Severity == "FATAL" && slices.Contains([]string{"57P01", "57P02", "57P03"}, msg.Code) {
-				slog.Debug("upstream going away, dropping message")
+				slog.Debug("upstream is terminating, dropping message")
 				continue
 			}
 		}
