@@ -22,6 +22,7 @@ type DownstreamConnEntry struct {
 	sessionQueries map[string]*SessionQ
 	paused         bool
 	unpause        chan bool
+	readyForQuery  bool
 }
 
 type DownstreamState struct {
@@ -73,12 +74,12 @@ func (d *DownstreamConnEntry) Listen() {
 			return
 		}
 		slog.Debug("downstream recv", "msg", msg)
-		go d.AnalyzeMsg(msg)
-		if d.paused {
+		if d.paused && d.readyForQuery {
 			slog.Debug("downstream paused")
 			<-d.unpause
 			slog.Debug("downstream unpaused")
 		}
+		go d.AnalyzeMsg(msg)
 		d.Data <- msg
 	}
 }
@@ -86,6 +87,14 @@ func (d *DownstreamConnEntry) Listen() {
 func (d *DownstreamConnEntry) Send(msg pgproto3.BackendMessage) error {
 	d.B.Send(msg)
 	return d.B.Flush()
+}
+
+func (d *DownstreamConnEntry) SendError() error {
+	return d.Send(&pgproto3.ErrorResponse{
+		Severity: "ERROR",
+		Message:  "upstream is terminating",
+		Code:     "57014",
+	})
 }
 
 func (d *DownstreamConnEntry) Pause() {
@@ -109,6 +118,8 @@ func (d *DownstreamConnEntry) Queries() []*SessionQ {
 func (d *DownstreamConnEntry) AnalyzeMsg(msg pgproto3.FrontendMessage) {
 	switch msg := (msg).(type) {
 	case *pgproto3.Query:
+		d.readyForQuery = false
+
 		query, err := pg_query.Parse(msg.String)
 		if err != nil {
 			slog.Warn("failed to parse query", "err", err.Error(), "query", msg.String)
@@ -121,11 +132,15 @@ func (d *DownstreamConnEntry) AnalyzeMsg(msg pgproto3.FrontendMessage) {
 				d.Inflight = append(d.Inflight, &Inflight{Query: &persist})
 			}
 		}
+	case *pgproto3.Parse:
+		// TODO: extended query protocol
 	}
 }
 
 func (d *DownstreamConnEntry) HandleResponseMsg(msg pgproto3.BackendMessage) {
 	switch msg.(type) {
+	case *pgproto3.ReadyForQuery:
+		d.readyForQuery = true
 	case *pgproto3.CommandComplete:
 		// TODO: lock d.Inflight
 		for _, inflight := range d.Inflight {

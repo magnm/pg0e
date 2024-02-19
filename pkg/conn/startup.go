@@ -15,8 +15,7 @@ func handleRegularStartup(ds *DownstreamConnEntry, us *UpstreamConnEntry) error 
 	}
 
 	// Handle everything until ReadyForQuery
-	isReadyForQuery := false
-	for !isReadyForQuery {
+	for !ds.readyForQuery {
 		msg, err := us.F.Receive()
 		if err != nil {
 			slog.Error("failed to receive initial params messages", "err", err.Error())
@@ -25,7 +24,7 @@ func handleRegularStartup(ds *DownstreamConnEntry, us *UpstreamConnEntry) error 
 
 		switch msg := msg.(type) {
 		case *pgproto3.ReadyForQuery:
-			isReadyForQuery = true
+			ds.readyForQuery = true
 		case *pgproto3.BackendKeyData:
 			us.Pid = msg.ProcessID
 			us.SetKey(msg.SecretKey)
@@ -120,8 +119,7 @@ func handleUpstreamStartup(ds *DownstreamConnEntry, us *UpstreamConnEntry) error
 	}
 
 	slog.Debug("ready for query", "upstreamPid", us.Pid, "downstreamPid", ds.Pid)
-
-	return nil
+	return ds.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
 }
 
 func handlePostgresStartup(ds *DownstreamConnEntry, us *UpstreamConnEntry) error {

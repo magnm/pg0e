@@ -111,6 +111,9 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 				s.UnMap(downstream, upstream)
 				return
 			}
+			if !downstream.readyForQuery {
+				downstream.SendError()
+			}
 			downstream.Pause()
 			slog.Error("upstream error", "err", err.Error())
 			s.UnMap(downstream, upstream)
