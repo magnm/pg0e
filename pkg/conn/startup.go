@@ -134,7 +134,7 @@ func handlePostgresStartup(s *Server, ds *DownstreamConnEntry, us *UpstreamConnE
 	switch rStartupMsg := rStartupMsg.(type) {
 	case *pgproto3.CancelRequest:
 		// Find actual upstream for the requested processId and forward request
-		if realUpstream, ok := s.upMap[rStartupMsg.ProcessID]; ok {
+		if realUpstream, ok := s.downMap[rStartupMsg.ProcessID]; ok {
 			if err := us.Send(&pgproto3.CancelRequest{
 				ProcessID: realUpstream.Pid,
 				SecretKey: realUpstream.key,
