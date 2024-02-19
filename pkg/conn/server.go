@@ -93,6 +93,7 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 		case msg := <-downstream.Data:
 			upstream.Send(msg)
 		case msg := <-upstream.Data:
+			go downstream.HandleResponseMsg(msg)
 			downstream.Send(msg)
 
 		case err := <-downstream.Term:
@@ -102,7 +103,6 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 				return
 			}
 			slog.Error("downstream error", "err", err.Error())
-			upstream.Close()
 			s.UnMap(downstream, upstream)
 			return
 		case err := <-upstream.Term:
