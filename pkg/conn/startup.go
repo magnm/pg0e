@@ -119,7 +119,7 @@ func handleUpstreamStartup(ds *DownstreamConnEntry, us *UpstreamConnEntry) error
 	}
 
 	slog.Debug("ready for query", "upstreamPid", us.Pid, "downstreamPid", ds.Pid)
-	return ds.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
+	return nil
 }
 
 func handlePostgresStartup(ds *DownstreamConnEntry, us *UpstreamConnEntry) error {

@@ -89,12 +89,15 @@ func (d *DownstreamConnEntry) Send(msg pgproto3.BackendMessage) error {
 	return d.B.Flush()
 }
 
-func (d *DownstreamConnEntry) SendError() error {
-	return d.Send(&pgproto3.ErrorResponse{
+func (d *DownstreamConnEntry) SendTerminalError() error {
+	if err := d.Send(&pgproto3.ErrorResponse{
 		Severity: "ERROR",
 		Message:  "upstream is terminating",
 		Code:     "57014",
-	})
+	}); err != nil {
+		return err
+	}
+	return d.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
 }
 
 func (d *DownstreamConnEntry) Pause() {
