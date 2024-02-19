@@ -1,6 +1,8 @@
 package conn
 
 import (
+	"errors"
+	"io"
 	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgproto3"
@@ -173,6 +175,12 @@ func handlePostgresStartup(ds *DownstreamConnEntry, us *UpstreamConnEntry) error
 		// Receive password
 		resp, err := ds.B.Receive()
 		if err != nil {
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				// Close upstream since we'll be waiting for a new connection with password
+				us.Close()
+				return ErrExpectedClose
+			}
+
 			slog.Error("failed to receive password response", "err", err.Error())
 			return err
 		}

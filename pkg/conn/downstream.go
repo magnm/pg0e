@@ -74,6 +74,7 @@ func (d *DownstreamConnEntry) Close() error {
 	return d.Conn.Close()
 }
 func (d *DownstreamConnEntry) Listen() {
+	slog.Debug("downstream listening", "addr", d.Conn.RemoteAddr().String())
 	for {
 		msg, err := d.B.Receive()
 		if err != nil {

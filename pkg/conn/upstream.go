@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"net"
+	"slices"
 	"strings"
 	"time"
 
@@ -51,7 +52,7 @@ func (u *UpstreamConnEntry) Listen() {
 	for {
 		msg, err := u.F.Receive()
 		if err != nil {
-			if u.isClosing && strings.Contains(err.Error(), "use of closed network connection") {
+			if u.isClosing && strings.Contains(err.Error(), "closed network connection") {
 				u.Term <- ErrExpectedClose
 				return
 			}
@@ -62,8 +63,8 @@ func (u *UpstreamConnEntry) Listen() {
 
 		switch msg := msg.(type) {
 		case *pgproto3.ErrorResponse:
-			if msg.Severity == "FATAL" {
-				slog.Debug("upstream fatal, dropping message")
+			if msg.Severity == "FATAL" && slices.Contains([]string{"57P01", "57P02", "57P03"}, msg.Code) {
+				slog.Debug("upstream going away, dropping message")
 				continue
 			}
 		}
@@ -82,7 +83,7 @@ func (u *UpstreamConnEntry) Startup(d *DownstreamConnEntry) error {
 }
 
 func (u *UpstreamConnEntry) Replay(d *DownstreamConnEntry) error {
-	for _, query := range d.sessionQueries {
+	for _, query := range d.Queries() {
 		slog.Debug("replaying session query", "query", query.Query)
 	}
 	return nil

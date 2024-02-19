@@ -77,7 +77,12 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 	}
 	defer upstream.Close()
 
-	handleRegularStartup(downstream, upstream)
+	if err := handleRegularStartup(downstream, upstream); err != nil {
+		if !errors.Is(err, ErrExpectedClose) {
+			slog.Error("failed to handle startup", "err", err.Error())
+		}
+		return
+	}
 	s.Map(downstream, upstream)
 
 	go downstream.Listen()
