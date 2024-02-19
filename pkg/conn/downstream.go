@@ -2,10 +2,8 @@ package conn
 
 import (
 	"log/slog"
-	"math/rand"
 	"net"
 	"strings"
-	"time"
 
 	"golang.org/x/exp/maps"
 
@@ -45,24 +43,8 @@ type SessionQ struct {
 }
 
 func NewDownstreamEntry(conn net.Conn) *DownstreamConnEntry {
-	if cc, ok := conn.(*net.TCPConn); ok {
-		if err := cc.SetKeepAlivePeriod(30 * time.Second); err != nil {
-			return nil
-		}
-		if err := cc.SetKeepAlive(true); err != nil {
-			return nil
-		}
-	}
-
-	// Temporary PID for mapping purposes until we get the real PID from the upstream
-	pid := rand.Uint32()
-
 	return &DownstreamConnEntry{
-		C: C{
-			Term: make(chan error, 1),
-			Conn: conn,
-			Pid:  pid,
-		},
+		C:              *NewConn(conn),
 		B:              pgproto3.NewBackend(conn, conn),
 		Data:           make(chan pgproto3.FrontendMessage, 100),
 		unpause:        make(chan bool, 1),

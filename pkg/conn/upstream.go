@@ -2,41 +2,23 @@ package conn
 
 import (
 	"log/slog"
-	"math/rand"
 	"net"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgproto3"
 )
 
 type UpstreamConnEntry struct {
-	C
+	*C
 	F         *pgproto3.Frontend
 	Data      chan pgproto3.BackendMessage
 	isClosing bool
 }
 
 func NewUpstreamEntry(conn net.Conn) *UpstreamConnEntry {
-	if cc, ok := conn.(*net.TCPConn); ok {
-		if err := cc.SetKeepAlivePeriod(30 * time.Second); err != nil {
-			return nil
-		}
-		if err := cc.SetKeepAlive(true); err != nil {
-			return nil
-		}
-	}
-
-	// Temporary PID for mapping purposes until we get the real PID from the upstream
-	pid := rand.Uint32()
-
 	return &UpstreamConnEntry{
-		C: C{
-			Term: make(chan error, 1),
-			Conn: conn,
-			Pid:  pid,
-		},
+		C:    NewConn(conn),
 		F:    pgproto3.NewFrontend(conn, conn),
 		Data: make(chan pgproto3.BackendMessage, 100),
 	}
