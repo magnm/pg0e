@@ -93,7 +93,7 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 		case msg := <-downstream.Data:
 			upstream.Send(msg)
 		case msg := <-upstream.Data:
-			go downstream.HandleResponseMsg(msg)
+			go downstream.AnalyzeResponseMsg(msg)
 			downstream.Send(msg)
 
 		case err := <-downstream.Term:

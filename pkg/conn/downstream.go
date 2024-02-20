@@ -49,6 +49,7 @@ const (
 type SessionQ struct {
 	Kind  PersistKind
 	Ident string
+	OIDs  []uint32
 	Query string
 }
 
@@ -138,57 +139,81 @@ func (d *DownstreamConnEntry) AnalyzeMsg(msg pgproto3.FrontendMessage) {
 			}
 		}
 	case *pgproto3.Parse:
-		// TODO: extended query protocol
+		if msg.Name == "" {
+			query, err := pg_query.Parse(msg.Query)
+			if err != nil {
+				slog.Warn("failed to parse parse-query", "err", err.Error(), "query", msg.Query)
+				return
+			}
+			persists := parsePersistQueries(query.Stmts)
+			if len(persists) > 0 {
+				slog.Debug("parse persists", "persists", persists)
+				for _, persist := range persists {
+					d.Inflight = append(d.Inflight, &Inflight{Query: &persist})
+				}
+			}
+		} else {
+			d.Inflight = append(d.Inflight, &Inflight{Query: &SessionQ{Kind: Prepare, Ident: msg.Name, Query: msg.Query, OIDs: msg.ParameterOIDs}})
+		}
+	case *pgproto3.Close:
+		d.Inflight = append(d.Inflight, &Inflight{Query: &SessionQ{Kind: Unprepare, Ident: msg.Name}})
 	}
 }
 
-func (d *DownstreamConnEntry) HandleResponseMsg(msg pgproto3.BackendMessage) {
+func (d *DownstreamConnEntry) AnalyzeResponseMsg(msg pgproto3.BackendMessage) {
 	switch msg.(type) {
 	case *pgproto3.ReadyForQuery:
 		d.readyForQuery = true
-	case *pgproto3.CommandComplete:
+	case *pgproto3.ParseComplete:
 		// TODO: lock d.Inflight
 		for _, inflight := range d.Inflight {
-			persist := inflight.Query
-			switch persist.Kind {
-			case TxBegin:
-				d.State.Tx = true
-			case TxEnd:
-				d.State.Tx = false
-			case Set, Prepare:
-				d.sessionQueries[string(persist.Kind)+persist.Ident] = persist
-			case Unset:
-				if persist.Ident == "" {
-					for k := range d.sessionQueries {
-						if strings.HasPrefix(string(k), string(Set)) {
-							delete(d.sessionQueries, k)
-						}
-					}
-				} else {
-					delete(d.sessionQueries, string(Set)+persist.Ident)
-				}
-			case Unprepare:
-				delete(d.sessionQueries, string(Prepare)+persist.Ident)
-			case Listen:
-				d.sessionQueries[string(Listen)+persist.Ident] = persist
-			case Unlisten:
-				if persist.Ident == "" {
-					for k := range d.sessionQueries {
-						if strings.HasPrefix(string(k), string(Listen)) {
-							delete(d.sessionQueries, k)
-						}
-					}
-				} else {
-					delete(d.sessionQueries, string(Listen)+persist.Ident)
-				}
+			switch inflight.Query.Kind {
+			case Prepare:
+				d.sessionQueries[string(Prepare)+inflight.Query.Ident] = inflight.Query
 			}
 		}
-		d.Inflight = nil
-		slog.Debug("downstream current", "state", d.State, "sessionQueries", d.sessionQueries)
+	case *pgproto3.CloseComplete:
+		// TODO: lock d.Inflight
+		for _, inflight := range d.Inflight {
+			switch inflight.Query.Kind {
+			case Unprepare:
+				delete(d.sessionQueries, string(Prepare)+inflight.Query.Ident)
+			}
+		}
+	case *pgproto3.CommandComplete:
+		d.finalizeInflight()
 	case *pgproto3.ErrorResponse:
 		// TODO: lock d.Inflight
 		d.Inflight = nil
 	}
+}
+
+func (d *DownstreamConnEntry) finalizeInflight() {
+	// TODO: lock d.Inflight
+	for _, inflight := range d.Inflight {
+		persist := inflight.Query
+		switch persist.Kind {
+		case TxBegin:
+			d.State.Tx = true
+		case TxEnd:
+			d.State.Tx = false
+		case Set, Prepare, Listen:
+			d.sessionQueries[string(persist.Kind)+persist.Ident] = persist
+		case Unset, Unprepare, Unlisten:
+			kind := strings.TrimPrefix(string(persist.Kind), "un")
+			if persist.Ident == "*" {
+				for k := range d.sessionQueries {
+					if strings.HasPrefix(string(k), string(kind)) {
+						delete(d.sessionQueries, k)
+					}
+				}
+			} else {
+				delete(d.sessionQueries, string(kind)+persist.Ident)
+			}
+		}
+	}
+	d.Inflight = nil
+	slog.Debug("downstream current", "state", d.State, "sessionQueries", d.sessionQueries)
 }
 
 func deparse(node *pg_query.Node) (string, error) {
@@ -216,9 +241,17 @@ func parsePersistQueries(stmts []*pg_query.RawStmt) []SessionQ {
 			}
 		case *pg_query.Node_PrepareStmt:
 			query, _ := deparse(raw.Stmt)
-			sessionQs = append(sessionQs, SessionQ{Kind: Prepare, Ident: node.PrepareStmt.Name, Query: query})
+			oids := []uint32{}
+			for _, oid := range node.PrepareStmt.Argtypes {
+				oids = append(oids, oid.GetTypeName().GetTypeOid())
+			}
+			sessionQs = append(sessionQs, SessionQ{Kind: Prepare, Ident: node.PrepareStmt.Name, Query: query, OIDs: oids})
 		case *pg_query.Node_DeallocateStmt:
-			sessionQs = append(sessionQs, SessionQ{Kind: Unprepare, Ident: node.DeallocateStmt.Name})
+			name := node.DeallocateStmt.Name
+			if name == "" {
+				name = "*"
+			}
+			sessionQs = append(sessionQs, SessionQ{Kind: Unprepare, Ident: name})
 		case *pg_query.Node_VariableSetStmt:
 			if node.VariableSetStmt.Kind == pg_query.VariableSetKind_VAR_SET_VALUE {
 				if !node.VariableSetStmt.GetIsLocal() {
@@ -235,14 +268,14 @@ func parsePersistQueries(stmts []*pg_query.RawStmt) []SessionQ {
 			} else if node.VariableSetStmt.Kind == pg_query.VariableSetKind_VAR_RESET {
 				sessionQs = append(sessionQs, SessionQ{Kind: Unset, Ident: node.VariableSetStmt.Name})
 			} else if node.VariableSetStmt.Kind == pg_query.VariableSetKind_VAR_RESET_ALL {
-				sessionQs = append(sessionQs, SessionQ{Kind: Unset})
+				sessionQs = append(sessionQs, SessionQ{Kind: Unset, Ident: "*"})
 			}
 		case *pg_query.Node_ListenStmt:
 			query, _ := deparse(raw.Stmt)
 			sessionQs = append(sessionQs, SessionQ{Kind: Listen, Ident: node.ListenStmt.Conditionname, Query: query})
 		case *pg_query.Node_UnlistenStmt:
-			if node.UnlistenStmt.Conditionname == "*" {
-				sessionQs = append(sessionQs, SessionQ{Kind: Unlisten})
+			if node.UnlistenStmt.Conditionname == "" {
+				sessionQs = append(sessionQs, SessionQ{Kind: Unlisten, Ident: "*"})
 			} else {
 				sessionQs = append(sessionQs, SessionQ{Kind: Unlisten, Ident: node.UnlistenStmt.Conditionname})
 			}
