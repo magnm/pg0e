@@ -5,9 +5,8 @@ import (
 	"net"
 	"strings"
 
-	"golang.org/x/exp/maps"
-
 	"github.com/jackc/pgx/v5/pgproto3"
+	"github.com/magnm/pg0e/pkg/util"
 	pg_query "github.com/pganalyze/pg_query_go/v5"
 )
 
@@ -17,9 +16,9 @@ type DownstreamConnEntry struct {
 	Data           chan pgproto3.FrontendMessage
 	Parameters     map[string]string
 	Password       string
-	Inflight       []*Inflight
 	State          DownstreamState
-	sessionQueries map[string]*SessionQ
+	inflight       *util.SyncedList[*Inflight]
+	sessionQueries *util.SyncedList[*SessionQ]
 	paused         bool
 	unpause        chan bool
 	readyForQuery  bool
@@ -42,6 +41,8 @@ const (
 	Unset     PersistKind = "unset"
 	Prepare   PersistKind = "prepare"
 	Unprepare PersistKind = "unprepare"
+	Parse     PersistKind = "parse"
+	Unparse   PersistKind = "unparse"
 	Listen    PersistKind = "listen"
 	Unlisten  PersistKind = "unlisten"
 )
@@ -59,7 +60,8 @@ func NewDownstreamEntry(conn net.Conn) *DownstreamConnEntry {
 		B:              pgproto3.NewBackend(conn, conn),
 		Data:           make(chan pgproto3.FrontendMessage, 100),
 		unpause:        make(chan bool, 1),
-		sessionQueries: make(map[string]*SessionQ),
+		sessionQueries: util.NewSyncedList[*SessionQ](),
+		inflight:       util.NewSyncedList[*Inflight](),
 	}
 }
 
@@ -117,8 +119,8 @@ func (d *DownstreamConnEntry) Resume() {
 	}
 }
 
-func (d *DownstreamConnEntry) Queries() []*SessionQ {
-	return maps.Values(d.sessionQueries)
+func (d *DownstreamConnEntry) Queries() *util.SyncedList[*SessionQ] {
+	return d.sessionQueries
 }
 
 func (d *DownstreamConnEntry) AnalyzeMsg(msg pgproto3.FrontendMessage) {
@@ -135,7 +137,7 @@ func (d *DownstreamConnEntry) AnalyzeMsg(msg pgproto3.FrontendMessage) {
 		if len(persists) > 0 {
 			slog.Debug("query persists", "persists", persists)
 			for _, persist := range persists {
-				d.Inflight = append(d.Inflight, &Inflight{Query: &persist})
+				d.inflight.Add(&Inflight{Query: &persist})
 			}
 		}
 	case *pgproto3.Parse:
@@ -147,16 +149,16 @@ func (d *DownstreamConnEntry) AnalyzeMsg(msg pgproto3.FrontendMessage) {
 			}
 			persists := parsePersistQueries(query.Stmts)
 			if len(persists) > 0 {
-				slog.Debug("parse persists", "persists", persists)
+				slog.Debug("parsed persists", "persists", persists)
 				for _, persist := range persists {
-					d.Inflight = append(d.Inflight, &Inflight{Query: &persist})
+					d.inflight.Add(&Inflight{Query: &persist})
 				}
 			}
 		} else {
-			d.Inflight = append(d.Inflight, &Inflight{Query: &SessionQ{Kind: Prepare, Ident: msg.Name, Query: msg.Query, OIDs: msg.ParameterOIDs}})
+			d.inflight.Add(&Inflight{Query: &SessionQ{Kind: Parse, Ident: msg.Name, Query: msg.Query, OIDs: msg.ParameterOIDs}})
 		}
 	case *pgproto3.Close:
-		d.Inflight = append(d.Inflight, &Inflight{Query: &SessionQ{Kind: Unprepare, Ident: msg.Name}})
+		d.inflight.Add(&Inflight{Query: &SessionQ{Kind: Unparse, Ident: msg.Name}})
 	}
 }
 
@@ -165,54 +167,52 @@ func (d *DownstreamConnEntry) AnalyzeResponseMsg(msg pgproto3.BackendMessage) {
 	case *pgproto3.ReadyForQuery:
 		d.readyForQuery = true
 	case *pgproto3.ParseComplete:
-		// TODO: lock d.Inflight
-		for _, inflight := range d.Inflight {
-			switch inflight.Query.Kind {
-			case Prepare:
-				d.sessionQueries[string(Prepare)+inflight.Query.Ident] = inflight.Query
+		// TODO: lock d.inflight
+		for inflight := range d.inflight.Each() {
+			switch inflight.Value.Query.Kind {
+			case Parse:
+				d.sessionQueries.Add(inflight.Value.Query)
 			}
 		}
 	case *pgproto3.CloseComplete:
-		// TODO: lock d.Inflight
-		for _, inflight := range d.Inflight {
-			switch inflight.Query.Kind {
-			case Unprepare:
-				delete(d.sessionQueries, string(Prepare)+inflight.Query.Ident)
+		for inflight := range d.inflight.Each() {
+			switch inflight.Value.Query.Kind {
+			case Unparse:
+				d.sessionQueries.RemoveFirst(func(query *SessionQ) bool {
+					return query.Kind == Parse && query.Ident == inflight.Value.Query.Ident
+				})
 			}
 		}
 	case *pgproto3.CommandComplete:
 		d.finalizeInflight()
 	case *pgproto3.ErrorResponse:
-		// TODO: lock d.Inflight
-		d.Inflight = nil
+		d.inflight.Clear()
 	}
 }
 
 func (d *DownstreamConnEntry) finalizeInflight() {
-	// TODO: lock d.Inflight
-	for _, inflight := range d.Inflight {
-		persist := inflight.Query
+	for inflight := range d.inflight.EachA(func([]*Inflight) []*Inflight { return []*Inflight{} }) {
+		persist := inflight.Value.Query
 		switch persist.Kind {
 		case TxBegin:
 			d.State.Tx = true
 		case TxEnd:
 			d.State.Tx = false
-		case Set, Prepare, Listen:
-			d.sessionQueries[string(persist.Kind)+persist.Ident] = persist
-		case Unset, Unprepare, Unlisten:
+		case Set, Prepare, Parse, Listen:
+			d.sessionQueries.Add(persist)
+		case Unset, Unprepare, Unparse, Unlisten:
 			kind := strings.TrimPrefix(string(persist.Kind), "un")
 			if persist.Ident == "*" {
-				for k := range d.sessionQueries {
-					if strings.HasPrefix(string(k), string(kind)) {
-						delete(d.sessionQueries, k)
-					}
-				}
+				d.sessionQueries.Remove(func(query *SessionQ) bool {
+					return query.Kind == PersistKind(kind)
+				})
 			} else {
-				delete(d.sessionQueries, string(kind)+persist.Ident)
+				d.sessionQueries.RemoveFirst(func(query *SessionQ) bool {
+					return query.Kind == PersistKind(kind) && query.Ident == persist.Ident
+				})
 			}
 		}
 	}
-	d.Inflight = nil
 	slog.Debug("downstream current", "state", d.State, "sessionQueries", d.sessionQueries)
 }
 

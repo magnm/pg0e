@@ -1,6 +1,7 @@
 package conn
 
 import (
+	"errors"
 	"log/slog"
 	"net"
 	"slices"
@@ -65,8 +66,41 @@ func (u *UpstreamConnEntry) Startup(d *DownstreamConnEntry) error {
 }
 
 func (u *UpstreamConnEntry) Replay(d *DownstreamConnEntry) error {
-	for _, query := range d.Queries() {
+	for query := range d.Queries().Each() {
+		query := query.Value
 		slog.Debug("replaying session query", "query", query.Query)
+		switch query.Kind {
+		case Prepare, Set, Listen:
+			if err := u.Send(&pgproto3.Query{String: query.Query}); err != nil {
+				return err
+			}
+		case Parse:
+			if err := u.Send(&pgproto3.Parse{Name: query.Ident, Query: query.Query, ParameterOIDs: query.OIDs}); err != nil {
+				return err
+			}
+			if err := u.Send(&pgproto3.Sync{}); err != nil {
+				return err
+			}
+		}
+		if err := readUntilReady(u); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func readUntilReady(u *UpstreamConnEntry) error {
+	for {
+		msg, err := u.F.Receive()
+		if err != nil {
+			return err
+		}
+
+		switch msg := msg.(type) {
+		case *pgproto3.ReadyForQuery:
+			return nil
+		case *pgproto3.ErrorResponse:
+			return errors.New(msg.Message)
+		}
+	}
 }
