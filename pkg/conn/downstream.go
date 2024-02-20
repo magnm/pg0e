@@ -19,8 +19,10 @@ type DownstreamConnEntry struct {
 	State          DownstreamState
 	inflight       *util.SyncedList[*Inflight]
 	sessionQueries *util.SyncedList[*SessionQ]
+	shouldPause    bool
 	paused         bool
-	unpause        chan bool
+	onUnpause      chan bool
+	onPaused       chan<- bool
 	readyForQuery  bool
 }
 
@@ -56,10 +58,10 @@ type SessionQ struct {
 
 func NewDownstreamEntry(conn net.Conn) *DownstreamConnEntry {
 	return &DownstreamConnEntry{
-		C:              NewConn(conn),
-		B:              pgproto3.NewBackend(conn, conn),
-		Data:           make(chan pgproto3.FrontendMessage, 100),
-		unpause:        make(chan bool, 1),
+		C:    NewConn(conn),
+		B:    pgproto3.NewBackend(conn, conn),
+		Data: make(chan pgproto3.FrontendMessage, 100),
+
 		sessionQueries: util.NewSyncedList[*SessionQ](),
 		inflight:       util.NewSyncedList[*Inflight](),
 	}
@@ -77,9 +79,14 @@ func (d *DownstreamConnEntry) Listen() {
 			return
 		}
 		slog.Debug("downstream recv", "msg", msg)
-		if d.paused && d.readyForQuery {
+		if d.shouldPause && d.readyForQuery {
+			d.paused = true
+			if d.onPaused != nil {
+				d.onPaused <- true
+			}
 			slog.Debug("downstream paused")
-			<-d.unpause
+			<-d.onUnpause
+			d.paused = false
 			slog.Debug("downstream unpaused")
 		}
 		go d.AnalyzeMsg(msg)
@@ -105,17 +112,30 @@ func (d *DownstreamConnEntry) SendTerminalError() error {
 	return err
 }
 
-func (d *DownstreamConnEntry) Pause() {
-	if !d.paused {
-		d.unpause = make(chan bool, 1)
-		d.paused = true
+func (d *DownstreamConnEntry) Pause(cb chan<- bool) {
+	if !d.shouldPause {
+		d.onUnpause = make(chan bool, 1)
+		d.shouldPause = true
+		if d.readyForQuery {
+			slog.Debug("downstream paused immediately")
+			d.paused = true
+			if cb != nil {
+				cb <- true
+			}
+		} else {
+			d.onPaused = cb
+		}
 	}
 }
 
+func (d *DownstreamConnEntry) IsPaused() bool {
+	return d.paused
+}
+
 func (d *DownstreamConnEntry) Resume() {
-	if d.paused {
-		d.paused = false
-		d.unpause <- true
+	if d.shouldPause {
+		d.shouldPause = false
+		d.onUnpause <- true
 	}
 }
 

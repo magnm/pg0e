@@ -12,9 +12,10 @@ import (
 
 type UpstreamConnEntry struct {
 	*C
-	F         *pgproto3.Frontend
-	Data      chan pgproto3.BackendMessage
-	isClosing bool
+	F           *pgproto3.Frontend
+	Data        chan pgproto3.BackendMessage
+	isClosing   bool
+	isSwitching bool
 }
 
 func NewUpstreamEntry(conn net.Conn) *UpstreamConnEntry {
@@ -30,13 +31,22 @@ func (u *UpstreamConnEntry) Close() error {
 	return u.Conn.Close()
 }
 
+func (u *UpstreamConnEntry) CloseForSwitch() error {
+	u.isSwitching = true
+	return u.Close()
+}
+
 func (u *UpstreamConnEntry) Listen() {
 	slog.Debug("upstream listening", "addr", u.Conn.RemoteAddr().String())
 	for {
 		msg, err := u.F.Receive()
 		if err != nil {
 			if u.isClosing && strings.Contains(err.Error(), "closed network connection") {
-				u.Term <- ErrExpectedClose
+				if u.isSwitching {
+					u.Term <- ErrExpectedSwitch
+				} else {
+					u.Term <- ErrExpectedClose
+				}
 				return
 			}
 			u.Term <- err

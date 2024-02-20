@@ -66,6 +66,38 @@ func (s *Server) UnMap(ds *DownstreamConnEntry, us *UpstreamConnEntry) {
 	delete(s.downMap, ds.Pid)
 }
 
+func (s *Server) InitiateSwitch() {
+	slog.Debug("preparing for switch", "downstreams", len(s.downMap))
+	pauseCb := make(chan bool, len(s.downMap))
+	for _, ds := range s.upMap {
+		ds.Pause(pauseCb)
+	}
+	timeout := time.After(5 * time.Second)
+	allPaused := false
+	for !allPaused {
+		select {
+		case <-timeout:
+			slog.Info("timeout, have to kill hanging connections")
+			for _, ds := range s.upMap {
+				if !ds.IsPaused() {
+					ds.SendTerminalError()
+					ds.Close()
+				}
+			}
+			allPaused = true
+		case <-pauseCb:
+			allPaused = true
+			for _, ds := range s.upMap {
+				if !ds.IsPaused() {
+					allPaused = false
+					break
+				}
+			}
+		}
+	}
+	slog.Info("ready for switch")
+}
+
 func (s *Server) handleConn(downstreamConn net.Conn) {
 	downstream := NewDownstreamEntry(downstreamConn)
 	defer downstream.Close()
@@ -112,7 +144,7 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 				s.UnMap(downstream, upstream)
 				return
 			}
-			downstream.Pause()
+			downstream.Pause(nil)
 			if !downstream.readyForQuery {
 				downstream.SendTerminalError()
 			}
@@ -144,8 +176,8 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 	}
 }
 
-func connectUpstream(attempts int) *UpstreamConnEntry {
-	if attempts > 15 {
+func connectUpstream(totalSlept float32) *UpstreamConnEntry {
+	if totalSlept > 15_000 {
 		return nil
 	}
 	upstreamConn, err := net.Dial("tcp", "localhost:5432")
@@ -153,7 +185,7 @@ func connectUpstream(attempts int) *UpstreamConnEntry {
 		slog.Error("failed to connect to upstream", "err", err.Error())
 		sleep := rand.Float32() * 2 * 1000
 		time.Sleep(time.Duration(sleep * float32(time.Millisecond)))
-		return connectUpstream(attempts + 1)
+		return connectUpstream(totalSlept + sleep)
 	}
 	return NewUpstreamEntry(upstreamConn)
 }

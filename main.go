@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 
+	"github.com/magnm/pg0e/pkg/api"
 	"github.com/magnm/pg0e/pkg/conn"
 )
 
@@ -28,6 +29,8 @@ func main() {
 	}
 
 	server := conn.New(listener)
+	apiServer := api.NewAPIServer(server)
 
+	go apiServer.Listen()
 	server.Listen()
 }
