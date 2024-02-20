@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net"
 	"os"
 	"os/signal"
@@ -150,7 +151,8 @@ func connectUpstream(attempts int) *UpstreamConnEntry {
 	upstreamConn, err := net.Dial("tcp", "localhost:5432")
 	if err != nil {
 		slog.Error("failed to connect to upstream", "err", err.Error())
-		time.Sleep(1 * time.Second)
+		sleep := rand.Float32() * 2 * 1000
+		time.Sleep(time.Duration(sleep * float32(time.Millisecond)))
 		return connectUpstream(attempts + 1)
 	}
 	return NewUpstreamEntry(upstreamConn)
