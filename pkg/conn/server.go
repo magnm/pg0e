@@ -145,7 +145,7 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 				return
 			}
 			downstream.Pause(nil)
-			if !downstream.readyForQuery {
+			if downstream.State.Tx || !downstream.readyForQuery {
 				downstream.SendTerminalError()
 			}
 			slog.Error("upstream error", "err", err.Error())

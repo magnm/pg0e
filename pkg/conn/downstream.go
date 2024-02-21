@@ -79,7 +79,7 @@ func (d *DownstreamConnEntry) Listen() {
 			return
 		}
 		slog.Debug("downstream recv", "msg", msg)
-		if d.shouldPause && d.readyForQuery {
+		if d.shouldPause && d.readyForQuery && !d.State.Tx {
 			d.paused = true
 			if d.onPaused != nil {
 				d.onPaused <- true
@@ -100,15 +100,21 @@ func (d *DownstreamConnEntry) Send(msg pgproto3.BackendMessage) error {
 }
 
 func (d *DownstreamConnEntry) SendTerminalError() error {
-	if err := d.Send(&pgproto3.ErrorResponse{
+	var err error
+	if err = d.Send(&pgproto3.ErrorResponse{
 		Severity: "ERROR",
 		Message:  "upstream is terminating",
 		Code:     "57014",
 	}); err != nil {
 		return err
 	}
-	err := d.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
+	if d.State.Tx {
+		err = d.Send(&pgproto3.ReadyForQuery{TxStatus: 'E'})
+	} else {
+		err = d.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
+	}
 	d.readyForQuery = true
+	d.State.Tx = false
 	return err
 }
 
@@ -116,7 +122,7 @@ func (d *DownstreamConnEntry) Pause(cb chan<- bool) {
 	if !d.shouldPause {
 		d.onUnpause = make(chan bool, 1)
 		d.shouldPause = true
-		if d.readyForQuery {
+		if !d.State.Tx && d.readyForQuery {
 			slog.Debug("downstream paused immediately")
 			d.paused = true
 			if cb != nil {
@@ -207,6 +213,7 @@ func (d *DownstreamConnEntry) AnalyzeResponseMsg(msg pgproto3.BackendMessage) {
 		d.finalizeInflight()
 	case *pgproto3.ErrorResponse:
 		d.inflight.Clear()
+		d.State.Tx = false
 	}
 }
 
