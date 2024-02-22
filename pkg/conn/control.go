@@ -3,6 +3,7 @@ package conn
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -23,11 +24,13 @@ func getControlDsn() string {
 	if dsn == "" {
 		pgHost := os.Getenv("PGHOST")
 		pgPort := os.Getenv("PGPORT")
-		if pgHost == "" || pgPort == "" {
-			pgHost = "localhost"
+		if pgHost == "" {
+			pgHost = "127.0.0.1"
+		}
+		if pgPort == "" {
 			pgPort = "5432"
 		}
-		dsn = "postgres://postgres@" + pgHost + ":" + pgPort + "/postgres"
+		dsn = fmt.Sprintf("postgres://postgres@%s:%s/postgres", pgHost, pgPort)
 	}
 	return dsn
 }
