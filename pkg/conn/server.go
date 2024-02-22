@@ -11,6 +11,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/magnm/pg0e/pkg/interfaces"
 )
 
 type Server struct {
@@ -18,6 +20,8 @@ type Server struct {
 
 	upMap   UpToDownMap
 	downMap DownToUpMap
+
+	orchestrator interfaces.Orchestrator
 }
 
 func New(listener net.Listener) *Server {
@@ -26,6 +30,10 @@ func New(listener net.Listener) *Server {
 		upMap:   make(UpToDownMap),
 		downMap: make(DownToUpMap),
 	}
+}
+
+func (s *Server) SetOrchestrator(orchestrator interfaces.Orchestrator) {
+	s.orchestrator = orchestrator
 }
 
 func (s *Server) Listen() {
@@ -129,7 +137,9 @@ func (s *Server) InitiateSwitch() {
 	}
 	slog.Info("exclusivity acquired, switching!")
 
-	// TODO: Trigger switch
+	if err := s.orchestrator.TriggerSwitchover(); err != nil {
+		slog.Error("failed to trigger switchover", "err", err.Error())
+	}
 }
 
 func (s *Server) UnpauseAll() {

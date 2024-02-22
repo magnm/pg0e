@@ -6,8 +6,10 @@ import (
 	"net"
 	"os"
 
-	"github.com/magnm/pg0e/pkg/api"
 	"github.com/magnm/pg0e/pkg/conn"
+	"github.com/magnm/pg0e/pkg/interfaces"
+	"github.com/magnm/pg0e/pkg/kube/cnpg"
+	"github.com/magnm/pg0e/pkg/local"
 )
 
 func init() {
@@ -29,8 +31,18 @@ func main() {
 	}
 
 	server := conn.New(listener)
-	apiServer := api.NewAPIServer(server)
 
-	go apiServer.Listen()
+	var orchestrator interfaces.Orchestrator
+	switch os.Getenv("ORCHESTRATOR") {
+	case "cnpg":
+		orchestrator = cnpg.New(server)
+	default:
+		slog.Warn("no known orchestrator specified, defaulting to local")
+		orchestrator = local.NewLocalOrchestrator(server)
+	}
+
+	server.SetOrchestrator(orchestrator)
+
+	go orchestrator.Start()
 	server.Listen()
 }
