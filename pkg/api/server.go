@@ -18,7 +18,11 @@ func NewAPIServer(server *conn.Server) *APIServer {
 	})
 
 	app.Get("/switch", func(c *fiber.Ctx) error {
-		server.InitiateSwitch()
+		go server.InitiateSwitch()
+		return c.SendString("ok")
+	})
+	app.Get("/unpause", func(c *fiber.Ctx) error {
+		go server.UnpauseAll()
 		return c.SendString("ok")
 	})
 

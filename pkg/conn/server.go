@@ -2,6 +2,7 @@ package conn
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/rand"
@@ -68,6 +69,13 @@ func (s *Server) UnMap(ds *DownstreamConnEntry, us *UpstreamConnEntry) {
 
 func (s *Server) InitiateSwitch() {
 	slog.Debug("preparing for switch", "downstreams", len(s.downMap))
+	control := NewControl()
+	if control == nil {
+		slog.Error("failed to connect to control, we'll do what we can")
+	}
+	control.AttachLock()
+	timeStart := time.Now()
+
 	pauseCb := make(chan bool, len(s.downMap))
 	for _, ds := range s.upMap {
 		ds.Pause(pauseCb)
@@ -96,6 +104,38 @@ func (s *Server) InitiateSwitch() {
 		}
 	}
 	slog.Info("ready for switch")
+
+	// Make sure at least 2 seconds have passed,
+	// otherwise sleep until 2s. Just to try to make sure all
+	// other clients have had a chance to prepare.
+	totalTime := time.Since(timeStart)
+	if totalTime < 2*time.Second {
+		time.Sleep(2*time.Second - totalTime)
+	}
+
+	control.ReleaseLock()
+
+	// If there are now no more clients, we can let the switch continue
+	if control.GetControlCount() != 0 {
+		slog.Info("clients still connected, leaving switch to someone else")
+		return
+	}
+	slog.Info("no more clients, acquiring exclusivity for switch")
+	if err := control.AcquireExclusivity(); err != nil {
+		if !errors.Is(err, ErrNoConnection) && !errors.Is(err, ErrFailedExclusivity) {
+			slog.Error("failed to acquire exclusivity", "err", err.Error())
+		}
+		return
+	}
+	slog.Info("exclusivity acquired, switching!")
+
+	// TODO: Trigger switch
+}
+
+func (s *Server) UnpauseAll() {
+	for _, ds := range s.upMap {
+		ds.Resume()
+	}
 }
 
 func (s *Server) handleConn(downstreamConn net.Conn) {
@@ -180,7 +220,13 @@ func connectUpstream(totalSlept float32) *UpstreamConnEntry {
 	if totalSlept > 15_000 {
 		return nil
 	}
-	upstreamConn, err := net.Dial("tcp", "localhost:5432")
+	pgHost := os.Getenv("PGHOST")
+	pgPort := os.Getenv("PGPORT")
+	if pgHost == "" || pgPort == "" {
+		pgHost = "localhost"
+		pgPort = "5432"
+	}
+	upstreamConn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", pgHost, pgPort))
 	if err != nil {
 		slog.Error("failed to connect to upstream", "err", err.Error())
 		sleep := rand.Float32() * 2 * 1000
