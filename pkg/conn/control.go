@@ -51,7 +51,7 @@ func (c *Control) Close() {
 	c.Conn.Close(context.Background())
 }
 
-func (c *Control) AttachLock() {
+func (c *Control) AttachPreparationLock() {
 	if c.Conn == nil {
 		return
 	}
@@ -61,7 +61,7 @@ func (c *Control) AttachLock() {
 	}
 }
 
-func (c *Control) ReleaseLock() {
+func (c *Control) ReleasePreparationLock() {
 	if c.Conn == nil {
 		return
 	}

@@ -44,7 +44,7 @@ func (l *LocalOrchestrator) Start() error {
 }
 
 func (l *LocalOrchestrator) Stop() error {
-	return nil
+	return l.app.Shutdown()
 }
 
 func (l *LocalOrchestrator) GetServer() interfaces.Server {

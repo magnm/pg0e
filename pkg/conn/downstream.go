@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/magnm/pg0e/pkg/util"
@@ -131,6 +132,21 @@ func (d *DownstreamConnEntry) Pause(cb chan<- bool) {
 		} else {
 			d.onPaused = cb
 		}
+
+		// Ensure that downstream is not paused too long no matter what
+		go func() {
+			timeout := time.After(10 * time.Second)
+			select {
+			case <-timeout:
+				if d.shouldPause || d.paused {
+					slog.Warn("downstream pause timeout")
+					d.shouldPause = false
+					d.onUnpause <- true
+				}
+			case <-d.onUnpause:
+				break
+			}
+		}()
 	}
 }
 

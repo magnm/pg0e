@@ -81,7 +81,7 @@ func (s *Server) InitiateSwitch() {
 	if control == nil {
 		slog.Error("failed to connect to control, we'll do what we can")
 	}
-	control.AttachLock()
+	control.AttachPreparationLock()
 	timeStart := time.Now()
 
 	pauseCb := make(chan bool, len(s.downMap))
@@ -121,7 +121,7 @@ func (s *Server) InitiateSwitch() {
 		time.Sleep(2*time.Second - totalTime)
 	}
 
-	control.ReleaseLock()
+	control.ReleasePreparationLock()
 
 	// If there are now no more clients, we can let the switch continue
 	if control.GetControlCount() != 0 {
