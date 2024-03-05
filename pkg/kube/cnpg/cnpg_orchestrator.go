@@ -21,6 +21,8 @@ import (
 const PhaseWaitingForUserAction = "Waiting for user action"
 const PhaseSwitchoverInProgress = "Switchover in progress"
 
+var ErrNoHealhtyReplicas = errors.New("no healthy replicas")
+
 var gvr = schema.GroupVersionResource{
 	Group:    "cnpg.io",
 	Version:  "v1",
@@ -108,10 +110,10 @@ func (c *CNPGOrchestrator) TriggerSwitchover() error {
 		return err
 	}
 	healthyReplicas, ok, err := unstructured.NestedSlice(resource.Object, "status", "instancesStatus", "healthy")
-	var targetPrimary string
 	if !ok || err != nil {
 		return err
 	}
+	var targetPrimary string
 	for _, r := range healthyReplicas {
 		if r.(string) != currentPrimary {
 			targetPrimary = r.(string)
@@ -119,7 +121,7 @@ func (c *CNPGOrchestrator) TriggerSwitchover() error {
 		}
 	}
 	if targetPrimary == "" {
-		return errors.New("no healthy replicas")
+		return ErrNoHealhtyReplicas
 	}
 
 	update := &ClusterSwitchoverUpdate{
@@ -130,7 +132,6 @@ func (c *CNPGOrchestrator) TriggerSwitchover() error {
 			TargetPrimaryTimestamp: time.Now().Format(time.RFC3339),
 		},
 	}
-	// convert to json
 	jsonUpdate, err := json.Marshal(update)
 	if err != nil {
 		return err
