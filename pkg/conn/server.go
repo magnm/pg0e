@@ -182,10 +182,9 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 		case err := <-downstream.Term:
 			if errors.Is(err, io.ErrUnexpectedEOF) {
 				slog.Info("downstream closed")
-				s.UnMap(downstream, upstream)
-				return
+			} else {
+				slog.Error("downstream error", "err", err.Error())
 			}
-			slog.Error("downstream error", "err", err.Error())
 			s.UnMap(downstream, upstream)
 			return
 		case err := <-upstream.Term:
