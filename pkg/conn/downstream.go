@@ -140,10 +140,11 @@ func (d *DownstreamConnEntry) Pause(cb chan<- bool) {
 			case <-timeout:
 				if d.shouldPause || d.paused {
 					slog.Warn("downstream pause timeout")
-					d.shouldPause = false
-					d.onUnpause <- true
+					d.Resume()
 				}
 			case <-d.onUnpause:
+				// forward onUnpause to real listener if this one gets it first
+				d.onUnpause <- true
 				break
 			}
 		}()
@@ -155,6 +156,7 @@ func (d *DownstreamConnEntry) IsPaused() bool {
 }
 
 func (d *DownstreamConnEntry) Resume() {
+	slog.Debug("downstream resuming")
 	if d.shouldPause {
 		d.shouldPause = false
 		d.onUnpause <- true

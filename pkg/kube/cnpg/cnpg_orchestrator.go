@@ -2,8 +2,8 @@ package cnpg
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"time"
 
@@ -12,7 +12,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/tools/cache"
@@ -24,9 +23,9 @@ const PhaseSwitchoverInProgress = "Switchover in progress"
 var ErrNoHealhtyReplicas = errors.New("no healthy replicas")
 
 var gvr = schema.GroupVersionResource{
-	Group:    "cnpg.io",
+	Group:    "postgresql.cnpg.io",
 	Version:  "v1",
-	Resource: "Cluster",
+	Resource: "clusters",
 }
 
 type CNPGOrchestrator struct {
@@ -34,17 +33,6 @@ type CNPGOrchestrator struct {
 
 	dynamicClient  *dynamic.DynamicClient
 	dynamicFactory dynamicinformer.DynamicSharedInformerFactory
-}
-
-type ClusterSwitchoverUpdate struct {
-	Status ClusterSwitchoverUpdateStatus `json:"status"`
-}
-
-type ClusterSwitchoverUpdateStatus struct {
-	Phase                  string `json:"phase"`
-	PhaseReason            string `json:"phaseReason"`
-	TargetPrimary          string `json:"targetPrimary"`
-	TargetPrimaryTimestamp string `json:"targetPrimaryTimestamp"`
 }
 
 func New(server interfaces.Server) *CNPGOrchestrator {
@@ -63,16 +51,33 @@ func New(server interfaces.Server) *CNPGOrchestrator {
 
 	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		UpdateFunc: func(oldObj, newObj interface{}) {
-			oldO := newObj.(*unstructured.Unstructured)
+			oldO := oldObj.(*unstructured.Unstructured)
+			oldName, _, _ := unstructured.NestedString(oldO.Object, "metadata", "name")
+			oldNs, _, err := unstructured.NestedString(oldO.Object, "metadata", "namespace")
+			if err != nil {
+				slog.Error("failed to get name/ns", "err", err)
+				return
+			}
+			if oldName != os.Getenv("CNPG_CLUSTER_NAME") || oldNs != os.Getenv("CNPG_NAMESPACE") {
+				slog.Debug("ignoring update, not configured name/ns", "name", oldName, "ns", oldNs)
+				return
+			}
+
 			oldPhase, ok, err := unstructured.NestedString(oldO.Object, "status", "phase")
 			if !ok || err != nil {
+				slog.Error("failed to get old phase", "ok", ok, "err", err)
 				return
 			}
 			newO := newObj.(*unstructured.Unstructured)
 			newPhase, ok, err := unstructured.NestedString(newO.Object, "status", "phase")
 			if !ok || err != nil {
+				slog.Error("failed to get new phase", "ok", ok, "err", err)
 				return
 			}
+			if oldPhase == newPhase {
+				return
+			}
+			slog.Info("phase change", "old", oldPhase, "new", newPhase)
 			if oldPhase != PhaseWaitingForUserAction && newPhase == PhaseWaitingForUserAction {
 				c.server.InitiateSwitch()
 			}
@@ -83,6 +88,7 @@ func New(server interfaces.Server) *CNPGOrchestrator {
 }
 
 func (c *CNPGOrchestrator) Start() error {
+	c.dynamicFactory.Start(nil)
 	return nil
 }
 
@@ -124,22 +130,23 @@ func (c *CNPGOrchestrator) TriggerSwitchover() error {
 		return ErrNoHealhtyReplicas
 	}
 
-	update := &ClusterSwitchoverUpdate{
-		Status: ClusterSwitchoverUpdateStatus{
-			Phase:                  PhaseSwitchoverInProgress,
-			PhaseReason:            "Switching over to " + targetPrimary,
-			TargetPrimary:          targetPrimary,
-			TargetPrimaryTimestamp: time.Now().Format(time.RFC3339),
-		},
+	if err = unstructured.SetNestedField(resource.Object, PhaseSwitchoverInProgress, "status", "phase"); err != nil {
+		return err
 	}
-	jsonUpdate, err := json.Marshal(update)
-	if err != nil {
+	if err = unstructured.SetNestedField(resource.Object, "Switching over to "+targetPrimary, "status", "phaseReason"); err != nil {
+		return err
+	}
+	if err = unstructured.SetNestedField(resource.Object, targetPrimary, "status", "targetPrimary"); err != nil {
+		return err
+	}
+	if err = unstructured.SetNestedField(resource.Object, time.Now().Format(time.RFC3339), "status", "targetPrimaryTimestamp"); err != nil {
 		return err
 	}
 
 	_, err = c.dynamicClient.
 		Resource(gvr).
 		Namespace(namespace).
-		Patch(context.Background(), clusterName, types.JSONPatchType, jsonUpdate, metav1.PatchOptions{})
+		UpdateStatus(context.Background(), resource, metav1.UpdateOptions{})
+
 	return err
 }
