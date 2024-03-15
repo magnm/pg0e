@@ -1,0 +1,25 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pg0e-cnpg-orchestrator
+rules:
+- apiGroups: ["postgresql.cnpg.io"]
+  resources: ["clusters"]
+  verbs: ["get", "list", "watch", "patch"]
+- apiGroups: ["postgresql.cnpg.io"]
+  resources: ["clusters/status"]
+  verbs: ["get", "update", "patch"]
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pg0e-cnpg-orchestrator
+subjects:
+- kind: Group
+  name: system:authenticated
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pg0e-cnpg-orchestrator
