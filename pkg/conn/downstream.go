@@ -226,10 +226,10 @@ func (d *DownstreamConnEntry) AnalyzeRequestMsg(msg pgproto3.FrontendMessage) {
 			slog.Warn("failed to parse query", "err", err.Error(), "query", msg.String)
 			return
 		}
-		persists := parsePersistQueries(query.Stmts)
-		if len(persists) > 0 {
-			slog.Debug("query persists", "persists", persists)
-			for _, persist := range persists {
+		persistable := parsePersistableQueries(query.Stmts)
+		if len(persistable) > 0 {
+			slog.Debug("query persistable", "persistable", persistable)
+			for _, persist := range persistable {
 				d.inflight.Add(&Inflight{Query: &persist})
 			}
 		}
@@ -240,10 +240,10 @@ func (d *DownstreamConnEntry) AnalyzeRequestMsg(msg pgproto3.FrontendMessage) {
 				slog.Warn("failed to parse parse-query", "err", err.Error(), "query", msg.Query)
 				return
 			}
-			persists := parsePersistQueries(query.Stmts)
-			if len(persists) > 0 {
-				slog.Debug("parsed persists", "persists", persists)
-				for _, persist := range persists {
+			persistable := parsePersistableQueries(query.Stmts)
+			if len(persistable) > 0 {
+				slog.Debug("parsed persistable", "persistable", persistable)
+				for _, persist := range persistable {
 					d.inflight.Add(&Inflight{Query: &persist})
 				}
 			}
@@ -330,7 +330,7 @@ func deparse(node *pg_query.Node) (string, error) {
 	return pg_query.Deparse(&parseResult)
 }
 
-func parsePersistQueries(stmts []*pg_query.RawStmt) []SessionQ {
+func parsePersistableQueries(stmts []*pg_query.RawStmt) []SessionQ {
 	sessionQs := []SessionQ{}
 	for _, raw := range stmts {
 		switch node := raw.Stmt.GetNode().(type) {
