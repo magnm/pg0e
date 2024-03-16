@@ -199,16 +199,19 @@ func (d *DownstreamConnEntry) AnalyzeMessages() {
 }
 
 func (d *DownstreamConnEntry) AnalyzeMsg(msg pgproto3.Message) {
+	instrTimeStart := time.Now()
 	switch msg := msg.(type) {
+	case *pgproto3.DataRow:
+		return // instantly ignore datarows
 	case pgproto3.FrontendMessage:
 		d.AnalyzeRequestMsg(msg)
 	case pgproto3.BackendMessage:
 		d.AnalyzeResponseMsg(msg)
 	}
+	metrics.RecAnalyzeTime(float64(time.Since(instrTimeStart).Milliseconds()))
 }
 
 func (d *DownstreamConnEntry) AnalyzeRequestMsg(msg pgproto3.FrontendMessage) {
-	instrTimeStart := time.Now()
 	slog.Debug("downstream req", "payload", msg)
 
 	switch msg := (msg).(type) {
@@ -254,16 +257,9 @@ func (d *DownstreamConnEntry) AnalyzeRequestMsg(msg pgproto3.FrontendMessage) {
 	case *pgproto3.Close:
 		d.inflight.Add(&Inflight{Query: &SessionQ{Kind: Unparse, Ident: msg.Name}})
 	}
-	metrics.RecAnalyzeTime(float64(time.Since(instrTimeStart).Milliseconds()))
 }
 
 func (d *DownstreamConnEntry) AnalyzeResponseMsg(msg pgproto3.BackendMessage) {
-	switch msg.(type) {
-	case *pgproto3.DataRow:
-		return // instantly ignore datarows
-	}
-
-	instrTimeStart := time.Now()
 	slog.Debug("upstream resp", "payload", msg)
 
 	switch msg.(type) {
@@ -297,7 +293,6 @@ func (d *DownstreamConnEntry) AnalyzeResponseMsg(msg pgproto3.BackendMessage) {
 		metrics.IncQueryErr(d.instrument.Id)
 		metrics.RecQueryTime(time.Since(d.instrument.QueryStart).Seconds())
 	}
-	metrics.RecAnalyzeTime(float64(time.Since(instrTimeStart).Milliseconds()))
 }
 
 func (d *DownstreamConnEntry) finalizeInflight() {
