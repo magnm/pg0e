@@ -117,7 +117,12 @@ func (d *DownstreamConnEntry) Listen(handler DownstreamMessageHandler) {
 
 func (d *DownstreamConnEntry) Send(msg pgproto3.BackendMessage) error {
 	d.B.Send(msg)
-	return d.B.Flush()
+	switch msg.(type) {
+	case *pgproto3.DataRow:
+		return nil
+	default:
+		return d.B.Flush()
+	}
 }
 
 func (d *DownstreamConnEntry) SendTerminalError() error {
