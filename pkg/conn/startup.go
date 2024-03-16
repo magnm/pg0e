@@ -181,46 +181,46 @@ func handlePostgresStartup(s *Server, ds *DownstreamConnEntry, us *UpstreamConnE
 		// Do nothing
 		ds.Send(fResp)
 		return nil
-	default:
-		// Ask client for cleartext password
-		ds.Send(&pgproto3.AuthenticationCleartextPassword{})
-
-		// Receive password
-		resp, err := ds.B.Receive()
-		if err != nil {
-			if errors.Is(err, io.ErrUnexpectedEOF) {
-				// Close upstream since we'll be waiting for a new connection with password
-				us.Close()
-				return ErrExpectedClose
-			}
-
-			slog.Error("failed to receive password response", "err", err.Error())
-			return err
-		}
-
-		switch resp := resp.(type) {
-		case *pgproto3.PasswordMessage:
-			slog.Debug("received password response", "msg", resp)
-			ds.Password = resp.Password
-		}
-
-		// TODO: Support other auth methods
-
-		// Forward password to upstream
-		err = us.Send(resp)
-		if err != nil {
-			slog.Error("failed to upstream password", "err", err.Error())
-			return err
-		}
-
-		fResp, err = us.F.Receive()
-		if err != nil {
-			slog.Error("failed to receive upstream password response", "err", err.Error())
-			return err
-		}
-		slog.Debug("received upstream password response", "msg", fResp)
-
-		ds.Send(fResp)
-		return nil
 	}
+
+	// Ask client for cleartext password
+	ds.Send(&pgproto3.AuthenticationCleartextPassword{})
+
+	// Receive password
+	resp, err := ds.B.Receive()
+	if err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			// Close upstream since we'll be waiting for a new connection with password
+			us.Close()
+			return ErrExpectedClose
+		}
+
+		slog.Error("failed to receive password response", "err", err.Error())
+		return err
+	}
+
+	switch resp := resp.(type) {
+	case *pgproto3.PasswordMessage:
+		slog.Debug("received password response", "msg", resp)
+		ds.Password = resp.Password
+	}
+
+	// TODO: Support other auth methods
+
+	// Forward password to upstream
+	err = us.Send(resp)
+	if err != nil {
+		slog.Error("failed to upstream password", "err", err.Error())
+		return err
+	}
+
+	fResp, err = us.F.Receive()
+	if err != nil {
+		slog.Error("failed to receive upstream password response", "err", err.Error())
+		return err
+	}
+	slog.Debug("received upstream password response", "msg", fResp)
+
+	ds.Send(fResp)
+	return nil
 }
