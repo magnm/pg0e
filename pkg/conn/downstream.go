@@ -16,7 +16,7 @@ import (
 type DownstreamConnEntry struct {
 	*C
 	B              *pgproto3.Backend
-	Data           chan pgproto3.FrontendMessage
+	MessageQueue   chan pgproto3.Message
 	Parameters     map[string]string
 	Password       string
 	State          DownstreamState
@@ -30,6 +30,8 @@ type DownstreamConnEntry struct {
 	onPaused      chan<- bool
 	readyForQuery bool
 }
+
+type DownstreamMessageHandler func(pgproto3.FrontendMessage) error
 
 type DownstreamState struct {
 	Tx bool
@@ -69,9 +71,9 @@ type SessionQ struct {
 
 func NewDownstreamEntry(conn net.Conn) *DownstreamConnEntry {
 	return &DownstreamConnEntry{
-		C:    NewConn(conn),
-		B:    pgproto3.NewBackend(conn, conn),
-		Data: make(chan pgproto3.FrontendMessage, 100),
+		C:            NewConn(conn),
+		B:            pgproto3.NewBackend(conn, conn),
+		MessageQueue: make(chan pgproto3.Message, 50000),
 
 		sessionQueries: util.NewSyncedList[*SessionQ](),
 		inflight:       util.NewSyncedList[*Inflight](),
@@ -85,7 +87,7 @@ func NewDownstreamEntry(conn net.Conn) *DownstreamConnEntry {
 func (d *DownstreamConnEntry) Close() error {
 	return d.Conn.Close()
 }
-func (d *DownstreamConnEntry) Listen() {
+func (d *DownstreamConnEntry) Listen(handler DownstreamMessageHandler) {
 	slog.Debug("downstream listening", "addr", d.Conn.RemoteAddr().String())
 	for {
 		msg, err := d.B.Receive()
@@ -93,7 +95,7 @@ func (d *DownstreamConnEntry) Listen() {
 			d.Term <- err
 			return
 		}
-		slog.Debug("downstream recv", "msg", msg)
+
 		if d.shouldPause && d.readyForQuery && !d.State.Tx {
 			d.paused = true
 			if d.onPaused != nil {
@@ -104,8 +106,12 @@ func (d *DownstreamConnEntry) Listen() {
 			d.paused = false
 			slog.Debug("downstream unpaused")
 		}
-		go d.AnalyzeMsg(msg)
-		d.Data <- msg
+
+		if err := handler(msg); err != nil {
+			slog.Error("downstream message handler error", "err", err.Error())
+			d.Term <- err
+			return
+		}
 	}
 }
 
@@ -181,7 +187,24 @@ func (d *DownstreamConnEntry) Queries() *util.SyncedList[*SessionQ] {
 	return d.sessionQueries
 }
 
-func (d *DownstreamConnEntry) AnalyzeMsg(msg pgproto3.FrontendMessage) {
+func (d *DownstreamConnEntry) AnalyzeMessages() {
+	for msg := range d.MessageQueue {
+		d.AnalyzeMsg(msg)
+	}
+}
+
+func (d *DownstreamConnEntry) AnalyzeMsg(msg pgproto3.Message) {
+	switch msg := msg.(type) {
+	case pgproto3.FrontendMessage:
+		d.AnalyzeRequestMsg(msg)
+	case pgproto3.BackendMessage:
+		d.AnalyzeResponseMsg(msg)
+	}
+}
+
+func (d *DownstreamConnEntry) AnalyzeRequestMsg(msg pgproto3.FrontendMessage) {
+	slog.Debug("downstream req", "msg", msg)
+
 	switch msg := (msg).(type) {
 	case *pgproto3.Query:
 		d.readyForQuery = false
@@ -228,6 +251,8 @@ func (d *DownstreamConnEntry) AnalyzeMsg(msg pgproto3.FrontendMessage) {
 }
 
 func (d *DownstreamConnEntry) AnalyzeResponseMsg(msg pgproto3.BackendMessage) {
+	slog.Debug("upstream resp", "msg", msg)
+
 	switch msg.(type) {
 	case *pgproto3.ReadyForQuery:
 		d.readyForQuery = true

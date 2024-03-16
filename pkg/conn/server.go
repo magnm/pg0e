@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/magnm/pg0e/pkg/interfaces"
 	"github.com/magnm/pg0e/pkg/metrics"
 )
@@ -168,7 +169,7 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 	defer downstream.Close()
 	slog.Info("new downstream", "addr", downstreamConn.RemoteAddr().String())
 
-	upstream := connectUpstream(0)
+	upstream := startUpstream(0)
 	if upstream == nil {
 		slog.Error("failed to connect to upstream")
 		return
@@ -181,20 +182,17 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 		}
 		return
 	}
-	s.Map(downstream, upstream)
 
-	go downstream.Listen()
-	go upstream.Listen()
-	metrics.IncConn()
+	go downstream.AnalyzeMessages()
+	go downstream.Listen(func(msg pgproto3.FrontendMessage) error {
+		downstream.MessageQueue <- msg
+		err := upstream.Send(msg)
+		return err
+	})
+	s.connectAndMap(downstream, upstream)
 
 	for {
 		select {
-		case msg := <-downstream.Data:
-			upstream.Send(msg)
-		case msg := <-upstream.Data:
-			go downstream.AnalyzeResponseMsg(msg)
-			downstream.Send(msg)
-
 		case err := <-downstream.Term:
 			if errors.Is(err, io.ErrUnexpectedEOF) {
 				slog.Info("downstream closed")
@@ -217,7 +215,7 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 			s.UnMap(downstream, upstream)
 			upstream.Close()
 			time.Sleep(2 * time.Second) // TODO: More intelligent
-			upstream = connectUpstream(0)
+			upstream = startUpstream(0)
 			if upstream == nil {
 				slog.Error("failed to reconnect to upstream")
 				return
@@ -234,14 +232,24 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 			}
 
 			// Ready
-			s.Map(downstream, upstream)
-			go upstream.Listen()
+			s.connectAndMap(downstream, upstream)
 			downstream.Resume()
 		}
 	}
 }
 
-func connectUpstream(totalSlept float32) *UpstreamConnEntry {
+func (s *Server) connectAndMap(ds *DownstreamConnEntry, us *UpstreamConnEntry) {
+	s.Map(ds, us)
+
+	go us.Listen(func(msg pgproto3.BackendMessage) error {
+		ds.MessageQueue <- msg
+		err := ds.Send(msg)
+		return err
+	})
+	metrics.IncConn()
+}
+
+func startUpstream(totalSlept float32) *UpstreamConnEntry {
 	if totalSlept > 15_000 {
 		return nil
 	}
@@ -256,7 +264,7 @@ func connectUpstream(totalSlept float32) *UpstreamConnEntry {
 		slog.Error("failed to connect to upstream", "err", err.Error())
 		sleep := rand.Float32() * 2 * 1000
 		time.Sleep(time.Duration(sleep * float32(time.Millisecond)))
-		return connectUpstream(totalSlept + sleep)
+		return startUpstream(totalSlept + sleep)
 	}
 	return NewUpstreamEntry(upstreamConn)
 }

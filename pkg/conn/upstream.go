@@ -13,16 +13,16 @@ import (
 type UpstreamConnEntry struct {
 	*C
 	F           *pgproto3.Frontend
-	Data        chan pgproto3.BackendMessage
 	isClosing   bool
 	isSwitching bool
 }
 
+type UpstreamMessageHandler func(pgproto3.BackendMessage) error
+
 func NewUpstreamEntry(conn net.Conn) *UpstreamConnEntry {
 	return &UpstreamConnEntry{
-		C:    NewConn(conn),
-		F:    pgproto3.NewFrontend(conn, conn),
-		Data: make(chan pgproto3.BackendMessage, 100),
+		C: NewConn(conn),
+		F: pgproto3.NewFrontend(conn, conn),
 	}
 }
 
@@ -36,7 +36,7 @@ func (u *UpstreamConnEntry) CloseForSwitch() error {
 	return u.Close()
 }
 
-func (u *UpstreamConnEntry) Listen() {
+func (u *UpstreamConnEntry) Listen(handler UpstreamMessageHandler) {
 	slog.Debug("upstream listening", "addr", u.Conn.RemoteAddr().String())
 	for {
 		msg, err := u.F.Receive()
@@ -52,7 +52,6 @@ func (u *UpstreamConnEntry) Listen() {
 			u.Term <- err
 			return
 		}
-		slog.Debug("upstream recv", "msg", msg)
 
 		switch msg := msg.(type) {
 		case *pgproto3.ErrorResponse:
@@ -62,7 +61,11 @@ func (u *UpstreamConnEntry) Listen() {
 			}
 		}
 
-		u.Data <- msg
+		if err := handler(msg); err != nil {
+			slog.Error("upstream message handler error", "err", err.Error())
+			u.Term <- err
+			return
+		}
 	}
 }
 
