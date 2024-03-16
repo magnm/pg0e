@@ -101,7 +101,7 @@ func (d *DownstreamConnEntry) Listen(handler DownstreamMessageHandler) {
 			if d.onPaused != nil {
 				d.onPaused <- true
 			}
-			slog.Debug("downstream paused")
+			slog.Debug("downstream paused", "immediate", false)
 			<-d.onUnpause
 			d.paused = false
 			slog.Debug("downstream unpaused")
@@ -149,7 +149,7 @@ func (d *DownstreamConnEntry) Pause(cb chan<- bool) {
 		d.onUnpause = make(chan bool, 1)
 		d.shouldPause = true
 		if !d.State.Tx && d.readyForQuery {
-			slog.Debug("downstream paused immediately")
+			slog.Debug("downstream paused", "immediate", true)
 			d.paused = true
 			if cb != nil {
 				cb <- true
@@ -318,7 +318,7 @@ func (d *DownstreamConnEntry) finalizeInflight() {
 			}
 		}
 	}
-	slog.Debug("downstream current", "state", d.State, "sessionQueries", d.sessionQueries)
+	slog.Debug("downstream current", "state", d.State, "sessionQueries", d.sessionQueries.UnsafeList())
 }
 
 func deparse(node *pg_query.Node) (string, error) {

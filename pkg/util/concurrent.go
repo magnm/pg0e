@@ -45,6 +45,10 @@ func (l *SyncedList[T]) RemoveFirst(f func(T) bool) {
 	}
 }
 
+func (l *SyncedList[T]) UnsafeList() []T {
+	return l.list
+}
+
 func (l *SyncedList[T]) Each() <-chan SyncedListItem[T] {
 	c := make(chan SyncedListItem[T])
 
