@@ -186,8 +186,7 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 	go downstream.AnalyzeMessages()
 	go downstream.Listen(func(msg pgproto3.FrontendMessage) error {
 		downstream.MessageQueue <- msg
-		err := upstream.Send(msg)
-		return err
+		return upstream.Send(msg)
 	})
 	s.connectAndMap(downstream, upstream)
 
@@ -243,8 +242,7 @@ func (s *Server) connectAndMap(ds *DownstreamConnEntry, us *UpstreamConnEntry) {
 
 	go us.Listen(func(msg pgproto3.BackendMessage) error {
 		ds.MessageQueue <- msg
-		err := ds.Send(msg)
-		return err
+		return ds.Send(msg)
 	})
 	metrics.IncConn()
 }
