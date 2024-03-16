@@ -15,7 +15,7 @@ type Int64GaugeCallback func(context.Context) int64
 var provider *metric.MeterProvider
 var meter api.Meter
 var querySendCounter, queryRecvCounter, queryErrCounter, connCounter api.Int64Counter
-var queryTimeHistogram api.Float64Histogram
+var queryTimeHistogram, analyzeTimeHistogram api.Float64Histogram
 
 var useConnAttr bool
 
@@ -39,6 +39,12 @@ func init() {
 		api.WithExplicitBucketBoundaries(0.0001, 0.001, 0.01, 0.05, 0.1, 0.5, 1, 2, 5),
 		api.WithDescription("Query time in seconds"),
 		api.WithUnit("s"),
+	)
+	analyzeTimeHistogram, _ = meter.Float64Histogram(
+		"analyze.time",
+		api.WithExplicitBucketBoundaries(0.0001, 0.001, 0.01, 0.05, 0.1, 1, 5, 10, 100),
+		api.WithDescription("Analyze time in milliseconds"),
+		api.WithUnit("ms"),
 	)
 
 	useConnAttr = os.Getenv("METRICS_PER_CONN") == "true"
@@ -88,4 +94,8 @@ func IncConn() {
 
 func RecQueryTime(dur float64) {
 	queryTimeHistogram.Record(context.Background(), dur)
+}
+
+func RecAnalyzeTime(dur float64) {
+	analyzeTimeHistogram.Record(context.Background(), dur)
 }

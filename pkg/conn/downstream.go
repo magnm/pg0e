@@ -208,6 +208,7 @@ func (d *DownstreamConnEntry) AnalyzeMsg(msg pgproto3.Message) {
 }
 
 func (d *DownstreamConnEntry) AnalyzeRequestMsg(msg pgproto3.FrontendMessage) {
+	instrTimeStart := time.Now()
 	slog.Debug("downstream req", "msg", msg)
 
 	switch msg := (msg).(type) {
@@ -253,16 +254,22 @@ func (d *DownstreamConnEntry) AnalyzeRequestMsg(msg pgproto3.FrontendMessage) {
 	case *pgproto3.Close:
 		d.inflight.Add(&Inflight{Query: &SessionQ{Kind: Unparse, Ident: msg.Name}})
 	}
+	metrics.RecAnalyzeTime(float64(time.Since(instrTimeStart).Milliseconds()))
 }
 
 func (d *DownstreamConnEntry) AnalyzeResponseMsg(msg pgproto3.BackendMessage) {
+	switch msg.(type) {
+	case *pgproto3.DataRow:
+		return // instantly ignore datarows
+	}
+
+	instrTimeStart := time.Now()
 	slog.Debug("upstream resp", "msg", msg)
 
 	switch msg.(type) {
 	case *pgproto3.ReadyForQuery:
 		d.readyForQuery = true
 	case *pgproto3.ParseComplete:
-		// TODO: lock d.inflight
 		for inflight := range d.inflight.Each() {
 			switch inflight.Value.Query.Kind {
 			case Parse:
@@ -290,6 +297,7 @@ func (d *DownstreamConnEntry) AnalyzeResponseMsg(msg pgproto3.BackendMessage) {
 		metrics.IncQueryErr(d.instrument.Id)
 		metrics.RecQueryTime(time.Since(d.instrument.QueryStart).Seconds())
 	}
+	metrics.RecAnalyzeTime(float64(time.Since(instrTimeStart).Milliseconds()))
 }
 
 func (d *DownstreamConnEntry) finalizeInflight() {
