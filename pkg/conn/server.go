@@ -1,6 +1,7 @@
 package conn
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/magnm/pg0e/pkg/interfaces"
+	"github.com/magnm/pg0e/pkg/metrics"
 )
 
 type Server struct {
@@ -49,6 +51,19 @@ func (s *Server) Listen() {
 			go s.handleConn(conn)
 		}
 	}()
+
+	metrics.ConnGauge(func(ctx context.Context) int64 {
+		return int64(len(s.upMap))
+	})
+	metrics.UniqQueryGauge(func(ctx context.Context) int64 {
+		totalMap := make(map[uint32]bool)
+		for _, ds := range s.upMap {
+			for k := range ds.instrument.UniqQueries {
+				totalMap[k] = true
+			}
+		}
+		return int64(len(totalMap))
+	})
 
 	slog.Info("listening", "addr", s.l.Addr().String())
 
@@ -170,6 +185,7 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 
 	go downstream.Listen()
 	go upstream.Listen()
+	metrics.IncConn()
 
 	for {
 		select {

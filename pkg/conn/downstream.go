@@ -6,7 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgproto3"
+	"github.com/magnm/pg0e/pkg/metrics"
 	"github.com/magnm/pg0e/pkg/util"
 	pg_query "github.com/pganalyze/pg_query_go/v5"
 )
@@ -20,15 +22,23 @@ type DownstreamConnEntry struct {
 	State          DownstreamState
 	inflight       *util.SyncedList[*Inflight]
 	sessionQueries *util.SyncedList[*SessionQ]
-	shouldPause    bool
-	paused         bool
-	onUnpause      chan bool
-	onPaused       chan<- bool
-	readyForQuery  bool
+	instrument     *DownstreamInstrument
+
+	shouldPause   bool
+	paused        bool
+	onUnpause     chan bool
+	onPaused      chan<- bool
+	readyForQuery bool
 }
 
 type DownstreamState struct {
 	Tx bool
+}
+
+type DownstreamInstrument struct {
+	Id          string
+	QueryStart  time.Time
+	UniqQueries map[uint32]bool
 }
 
 type Inflight struct {
@@ -65,6 +75,10 @@ func NewDownstreamEntry(conn net.Conn) *DownstreamConnEntry {
 
 		sessionQueries: util.NewSyncedList[*SessionQ](),
 		inflight:       util.NewSyncedList[*Inflight](),
+		instrument: &DownstreamInstrument{
+			Id:          uuid.NewString(),
+			UniqQueries: make(map[uint32]bool),
+		},
 	}
 }
 
@@ -171,6 +185,9 @@ func (d *DownstreamConnEntry) AnalyzeMsg(msg pgproto3.FrontendMessage) {
 	switch msg := (msg).(type) {
 	case *pgproto3.Query:
 		d.readyForQuery = false
+		metrics.IncQuerySend(d.instrument.Id)
+		d.instrument.QueryStart = time.Now()
+		d.instrument.UniqQueries[util.HashString(msg.String)] = true
 
 		query, err := pg_query.Parse(msg.String)
 		if err != nil {
@@ -201,6 +218,10 @@ func (d *DownstreamConnEntry) AnalyzeMsg(msg pgproto3.FrontendMessage) {
 		} else {
 			d.inflight.Add(&Inflight{Query: &SessionQ{Kind: Parse, Ident: msg.Name, Query: msg.Query, OIDs: msg.ParameterOIDs}})
 		}
+		d.instrument.UniqQueries[util.HashString(msg.Query)] = true
+	case *pgproto3.Execute:
+		metrics.IncQuerySend(d.instrument.Id)
+		d.instrument.QueryStart = time.Now()
 	case *pgproto3.Close:
 		d.inflight.Add(&Inflight{Query: &SessionQ{Kind: Unparse, Ident: msg.Name}})
 	}
@@ -229,9 +250,15 @@ func (d *DownstreamConnEntry) AnalyzeResponseMsg(msg pgproto3.BackendMessage) {
 		}
 	case *pgproto3.CommandComplete:
 		d.finalizeInflight()
+		metrics.IncQueryRecv(d.instrument.Id)
+		metrics.RecQueryTime(time.Since(d.instrument.QueryStart).Seconds())
+		slog.Debug("query time", "duration", time.Since(d.instrument.QueryStart).Seconds())
+
 	case *pgproto3.ErrorResponse:
 		d.inflight.Clear()
 		d.State.Tx = false
+		metrics.IncQueryErr(d.instrument.Id)
+		metrics.RecQueryTime(time.Since(d.instrument.QueryStart).Seconds())
 	}
 }
 

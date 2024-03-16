@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 
+	"github.com/magnm/pg0e/pkg/api"
 	"github.com/magnm/pg0e/pkg/conn"
 	"github.com/magnm/pg0e/pkg/interfaces"
 	"github.com/magnm/pg0e/pkg/kube/cnpg"
@@ -43,6 +44,7 @@ func main() {
 
 	server.SetOrchestrator(orchestrator)
 
+	go api.StartApiServer()
 	go orchestrator.Start()
 	server.Listen()
 }
