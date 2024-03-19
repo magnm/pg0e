@@ -24,7 +24,7 @@ func NewUpstreamEntry(conn net.Conn) *UpstreamConnEntry {
 	return &UpstreamConnEntry{
 		C:      NewConn(conn),
 		F:      pgproto3.NewFrontend(conn, conn),
-		logger: slog.With("conn", "upstream", "addr", conn.RemoteAddr().String()),
+		logger: slog.With("conn", "upstream", "addr", conn.LocalAddr().String()),
 	}
 }
 
