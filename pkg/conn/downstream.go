@@ -193,8 +193,13 @@ func (d *DownstreamConnEntry) Queries() *util.SyncedList[*SessionQ] {
 }
 
 func (d *DownstreamConnEntry) AnalyzeMessages() {
-	for msg := range d.MessageQueue {
-		d.AnalyzeMsg(msg)
+	for {
+		select {
+		case <-d.Term:
+			return // terminate, errors handled elsewhere
+		case msg := <-d.MessageQueue:
+			d.AnalyzeMsg(msg)
+		}
 	}
 }
 
