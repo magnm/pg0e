@@ -182,7 +182,7 @@ func (s *Server) UnpauseAll() {
 func (s *Server) handleConn(downstreamConn net.Conn) {
 	downstream := NewDownstreamEntry(downstreamConn)
 	defer downstream.Close()
-	downstream.logger.Info("new downstream")
+	downstream.logger.Info("new downstream", "total", len(s.downMap))
 
 	if s.paused {
 		<-s.onUnpause
