@@ -182,7 +182,7 @@ func (s *Server) UnpauseAll() {
 func (s *Server) handleConn(downstreamConn net.Conn) {
 	downstream := NewDownstreamEntry(downstreamConn)
 	defer downstream.Close()
-	slog.Info("new downstream", "addr", downstreamConn.RemoteAddr().String())
+	downstream.logger.Info("new downstream")
 
 	if s.paused {
 		<-s.onUnpause
@@ -190,14 +190,15 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 
 	upstream := startUpstream(0)
 	if upstream == nil {
-		slog.Error("failed to connect to upstream")
+		downstream.logger.Error("failed to connect to upstream")
 		return
 	}
 	defer upstream.Close()
+	upstream.logger.Info("new upstream", "downstream", downstreamConn.RemoteAddr().String())
 
 	if err := s.handleRegularStartup(downstream, upstream); err != nil {
 		if !errors.Is(err, ErrExpectedClose) {
-			slog.Error("failed to handle startup", "err", err.Error())
+			upstream.logger.Error("failed to handle startup", "err", err.Error())
 		}
 		return
 	}
@@ -213,15 +214,15 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 		select {
 		case err := <-downstream.Term:
 			if errors.Is(err, io.ErrUnexpectedEOF) {
-				slog.Info("downstream closed")
+				downstream.logger.Info("downstream closed")
 			} else {
-				slog.Error("downstream error", "err", err.Error())
+				downstream.logger.Error("downstream error", "err", err.Error())
 			}
 			s.UnMap(downstream, upstream)
 			return
 		case err := <-upstream.Term:
 			if errors.Is(err, ErrExpectedClose) {
-				slog.Info("upstream closed")
+				upstream.logger.Info("upstream closed")
 				s.UnMap(downstream, upstream)
 				return
 			}
@@ -229,23 +230,24 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 			if downstream.State.Tx || !downstream.readyForQuery {
 				downstream.SendTerminalError()
 			}
-			slog.Error("upstream error", "err", err.Error())
+			upstream.logger.Error("upstream error", "err", err.Error())
 			s.UnMap(downstream, upstream)
 			upstream.Close()
 			time.Sleep(2 * time.Second) // TODO: More intelligent
 			upstream = startUpstream(0)
 			if upstream == nil {
-				slog.Error("failed to reconnect to upstream")
+				downstream.logger.Error("failed to reconnect to upstream")
 				return
 			}
+			upstream.logger.Info("reconnected to upstream", "downstream", downstreamConn.RemoteAddr().String())
 			err = upstream.Startup(downstream)
 			if err != nil {
-				slog.Error("failed to restart upstream", "err", err.Error())
+				upstream.logger.Error("failed to restart upstream", "err", err.Error())
 				return
 			}
 			err = upstream.Replay(downstream)
 			if err != nil {
-				slog.Error("failed to replay upstream", "err", err.Error())
+				upstream.logger.Error("failed to replay upstream", "err", err.Error())
 				return
 			}
 
