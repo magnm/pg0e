@@ -18,14 +18,35 @@ type UpstreamConnEntry struct {
 	logger      *slog.Logger
 }
 
+
 type UpstreamMessageHandler func(pgproto3.BackendMessage) error
 
-func NewUpstreamEntry(conn net.Conn) *UpstreamConnEntry {
-	return &UpstreamConnEntry{
-		C:      NewConn(conn),
+func NewUpstream(params *ConnectionParams) (*UpstreamConnEntry, error) {
+	conn := connect()
+	conn.Params = params
+
+	entry := &UpstreamConnEntry{
+		C:      conn,
 		F:      pgproto3.NewFrontend(conn, conn),
 		logger: slog.With("conn", "upstream", "addr", conn.LocalAddr().String()),
 	}
+
+	if err := entry.Startup(); err != nil {
+		return nil, err
+	}
+
+	return entry, nil
+}
+
+func connect() *Conn {
+	pgHost := os.Getenv("PGHOST")
+	pgPort := os.Getenv("PGPORT")
+	if pgHost == "" || pgPort == "" {
+		pgHost = "localhost"
+		pgPort = "5432"
+	}
+	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", pgHost, pgPort))
+	return NewConn(conn)
 }
 
 func (u *UpstreamConnEntry) Close() error {
@@ -76,8 +97,79 @@ func (u *UpstreamConnEntry) Send(msg pgproto3.FrontendMessage) error {
 	return u.F.Flush()
 }
 
-func (u *UpstreamConnEntry) Startup(d *DownstreamConnEntry) error {
-	return handleUpstreamStartup(d, u)
+func (u *UpstreamConnEntry) Startup() error {
+	startupMsg := &pgproto3.StartupMessage{
+		ProtocolVersion: pgproto3.ProtocolVersionNumber,
+		Parameters:      u.Params.PGParameters,
+	}
+	err := u.Send(startupMsg)
+	if err != nil {
+		u.logger.Error("failed to send startup message", "err", err.Error())
+		return err
+	}
+
+	resp, err := u.F.Receive()
+	if err != nil {
+		u.logger.Error("failed to receive startup response", "err", err.Error())
+		return err
+	}
+	u.logger.Debug("received startup response", "payload", resp)
+
+	switch resp := resp.(type) {
+	case *pgproto3.AuthenticationOk:
+		// Do nothing
+		break
+	default:
+		// TODO: Handle other auth methods
+		pwdMsg := &pgproto3.PasswordMessage{
+			Password: u.Params.Password,
+		}
+		err = u.Send(pwdMsg)
+		if err != nil {
+			u.logger.Error("failed to send password message", "err", err.Error())
+			return err
+		}
+
+		resp, err = u.F.Receive()
+		if err != nil {
+			u.logger.Error("failed to receive password response", "err", err.Error())
+			return err
+		}
+		u.logger.Debug("received password response", "payload", resp)
+
+		switch resp := resp.(type) {
+		case *pgproto3.AuthenticationOk:
+			// Do nothing
+			break
+		default:
+			u.logger.Error("unsupported auth method", "payload", resp)
+			return nil
+		}
+	}
+
+	/**
+	RFQ SEQUENCE
+	**/
+
+	isReadyForQuery := false
+	for !isReadyForQuery {
+		msg, err := u.F.Receive()
+		if err != nil {
+			u.logger.Error("failed to receive initial params messages", "err", err.Error())
+			return err
+		}
+
+		switch msg := msg.(type) {
+		case *pgproto3.ReadyForQuery:
+			isReadyForQuery = true
+		case *pgproto3.BackendKeyData:
+			u.Pid = msg.ProcessID
+			u.SetKey(msg.SecretKey)
+		}
+	}
+
+	u.logger.Debug("ready for query", "pid", us.Pid)
+	return nil
 }
 
 func (u *UpstreamConnEntry) Replay(d *DownstreamConnEntry) error {

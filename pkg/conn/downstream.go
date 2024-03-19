@@ -36,6 +36,7 @@ type DownstreamMessageHandler func(pgproto3.FrontendMessage) error
 
 type DownstreamState struct {
 	Tx bool
+	Idle bool
 }
 
 type DownstreamInstrument struct {
@@ -70,8 +71,8 @@ type SessionQ struct {
 	Query string
 }
 
-func NewDownstreamEntry(conn net.Conn) *DownstreamConnEntry {
-	return &DownstreamConnEntry{
+func NewDownstream(conn net.Conn) (*DownstreamConnEntry, error) {
+	entry := &DownstreamConnEntry{
 		C:            NewConn(conn),
 		B:            pgproto3.NewBackend(conn, conn),
 		MessageQueue: make(chan pgproto3.Message, 50000),
@@ -84,6 +85,12 @@ func NewDownstreamEntry(conn net.Conn) *DownstreamConnEntry {
 		},
 		logger: slog.With("addr", conn.RemoteAddr().String(), "conn", "downstream"),
 	}
+
+	if err := entry.Startup(); err != nil {
+		return nil, error
+	}
+
+	return entry, nil
 }
 
 func (d *DownstreamConnEntry) Close() error {
@@ -146,6 +153,10 @@ func (d *DownstreamConnEntry) SendTerminalError() error {
 	return err
 }
 
+func (d *DownstreamConnEntry) IsInSafeState() bool {
+	return !d.State.Tx && d.State.Idle
+}
+
 func (d *DownstreamConnEntry) Pause(cb chan<- bool) {
 	if !d.shouldPause {
 		d.onUnpause = make(chan bool, 1)
@@ -192,6 +203,10 @@ func (d *DownstreamConnEntry) Resume() {
 
 func (d *DownstreamConnEntry) Queries() *util.SyncedList[*SessionQ] {
 	return d.sessionQueries
+}
+
+func (d *DownstreamConnEntry) Startup() {
+	
 }
 
 func (d *DownstreamConnEntry) AnalyzeMessages() {

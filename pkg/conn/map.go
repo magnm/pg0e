@@ -10,8 +10,14 @@ import (
 var ErrExpectedClose = errors.New("expected close")
 var ErrExpectedSwitch = errors.New("expected switch")
 
+type ConnectionParams struct {
+	Password string
+	PGParameters map[string]string
+}
+
 type C struct {
 	Term chan error
+	Params *ConnectionParams
 	Pid  uint32
 	key  uint32
 

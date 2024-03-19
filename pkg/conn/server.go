@@ -188,6 +188,8 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 		<-s.onUnpause
 	}
 
+	upstream := NewUpstream()
+
 	upstream := startUpstream(0)
 	if upstream == nil {
 		downstream.logger.Error("failed to connect to upstream")
@@ -272,13 +274,6 @@ func startUpstream(totalSlept float32) *UpstreamConnEntry {
 	if totalSlept > 15_000 {
 		return nil
 	}
-	pgHost := os.Getenv("PGHOST")
-	pgPort := os.Getenv("PGPORT")
-	if pgHost == "" || pgPort == "" {
-		pgHost = "localhost"
-		pgPort = "5432"
-	}
-	upstreamConn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", pgHost, pgPort))
 	if err != nil {
 		slog.Error("failed to connect to upstream", "err", err.Error())
 		sleep := rand.Float32() * 2 * 1000
