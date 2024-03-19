@@ -18,7 +18,7 @@ func (s *Server) handleRegularStartup(ds *DownstreamConnEntry, us *UpstreamConnE
 	for !ds.readyForQuery {
 		msg, err := us.F.Receive()
 		if err != nil {
-			slog.Error("failed to receive initial params messages", "err", err.Error())
+			us.logger.Error("failed to receive initial params messages", "err", err.Error())
 			return err
 		}
 
@@ -34,12 +34,12 @@ func (s *Server) handleRegularStartup(ds *DownstreamConnEntry, us *UpstreamConnE
 
 		err = ds.Send(msg)
 		if err != nil {
-			slog.Error("failed to send initial params messages", "err", err.Error())
+			ds.logger.Error("failed to send initial params messages", "err", err.Error())
 			return err
 		}
 	}
 
-	slog.Debug("ready for query", "upstreamPid", us.Pid, "downstreamPid", ds.Pid)
+	ds.logger.Debug("ready for query", "upstreamPid", us.Pid, "downstreamPid", ds.Pid)
 
 	return nil
 }
@@ -54,16 +54,16 @@ func handleUpstreamStartup(ds *DownstreamConnEntry, us *UpstreamConnEntry) error
 	}
 	err := us.Send(startupMsg)
 	if err != nil {
-		slog.Error("failed to send startup message", "err", err.Error())
+		us.logger.Error("failed to send startup message", "err", err.Error())
 		return err
 	}
 
 	fResp, err := us.F.Receive()
 	if err != nil {
-		slog.Error("failed to receive startup response", "err", err.Error())
+		us.logger.Error("failed to receive startup response", "err", err.Error())
 		return err
 	}
-	slog.Debug("received startup response", "payload", fResp)
+	us.logger.Debug("received startup response", "msg", fResp)
 
 	switch fResp := fResp.(type) {
 	case *pgproto3.AuthenticationOk:
@@ -76,23 +76,23 @@ func handleUpstreamStartup(ds *DownstreamConnEntry, us *UpstreamConnEntry) error
 		}
 		err = us.Send(pwdMsg)
 		if err != nil {
-			slog.Error("failed to send password message", "err", err.Error())
+			us.logger.Error("failed to send password message", "err", err.Error())
 			return err
 		}
 
 		fResp, err = us.F.Receive()
 		if err != nil {
-			slog.Error("failed to receive password response", "err", err.Error())
+			us.logger.Error("failed to receive password response", "err", err.Error())
 			return err
 		}
-		slog.Debug("received password response", "payload", fResp)
+		us.logger.Debug("received password response", "msg", fResp)
 
 		switch fResp := fResp.(type) {
 		case *pgproto3.AuthenticationOk:
 			// Do nothing
 			break
 		default:
-			slog.Error("unsupported auth method", "payload", fResp)
+			us.logger.Error("unsupported auth method", "msg", fResp)
 			return nil
 		}
 	}
@@ -105,7 +105,7 @@ func handleUpstreamStartup(ds *DownstreamConnEntry, us *UpstreamConnEntry) error
 	for !isReadyForQuery {
 		msg, err := us.F.Receive()
 		if err != nil {
-			slog.Error("failed to receive initial params messages", "err", err.Error())
+			us.logger.Error("failed to receive initial params messages", "err", err.Error())
 			return err
 		}
 
@@ -118,7 +118,7 @@ func handleUpstreamStartup(ds *DownstreamConnEntry, us *UpstreamConnEntry) error
 		}
 	}
 
-	slog.Debug("ready for query", "upstreamPid", us.Pid, "downstreamPid", ds.Pid)
+	us.logger.Debug("ready for query", "upstreamPid", us.Pid, "downstreamPid", ds.Pid)
 	return nil
 }
 
@@ -128,7 +128,7 @@ func handlePostgresStartup(s *Server, ds *DownstreamConnEntry, us *UpstreamConnE
 		slog.Error("failed to receive startup message", "err", err.Error())
 		return err
 	}
-	slog.Debug("received startup message", "payload", rStartupMsg)
+	ds.logger.Debug("received startup message", "msg", rStartupMsg)
 
 	var startupMsg *pgproto3.StartupMessage
 	switch rStartupMsg := rStartupMsg.(type) {
@@ -139,12 +139,12 @@ func handlePostgresStartup(s *Server, ds *DownstreamConnEntry, us *UpstreamConnE
 				ProcessID: realUpstream.Pid,
 				SecretKey: realUpstream.key,
 			}); err != nil {
-				slog.Error("failed to send cancel request", "err", err.Error())
+				ds.logger.Error("failed to send cancel request", "err", err.Error())
 				return err
 			}
 			return ErrExpectedClose
 		} else {
-			slog.Warn("failed to find upstream for cancel request", "processId", rStartupMsg.ProcessID)
+			ds.logger.Warn("failed to find upstream for cancel request", "processId", rStartupMsg.ProcessID)
 			return ErrExpectedClose
 		}
 	case *pgproto3.StartupMessage:
@@ -152,7 +152,7 @@ func handlePostgresStartup(s *Server, ds *DownstreamConnEntry, us *UpstreamConnE
 	case *pgproto3.SSLRequest:
 		_, err = ds.Conn.Write([]byte{byte('N')})
 		if err != nil {
-			slog.Error("failed to send SSL denial response", "err", err.Error())
+			ds.logger.Error("failed to send SSL denial response", "err", err.Error())
 			return err
 		}
 		// Client should redo the startup after getting denied
@@ -165,16 +165,16 @@ func handlePostgresStartup(s *Server, ds *DownstreamConnEntry, us *UpstreamConnE
 	// Forward startup to upstream
 	err = us.Send(startupMsg)
 	if err != nil {
-		slog.Error("failed to upstream startup message", "err", err.Error())
+		ds.logger.Error("failed to upstream startup message", "err", err.Error())
 		return err
 	}
 
 	fResp, err := us.F.Receive()
 	if err != nil {
-		slog.Error("failed to receive upstream message", "err", err.Error())
+		ds.logger.Error("failed to receive upstream message", "err", err.Error())
 		return err
 	}
-	slog.Debug("received upstream startup message", "payload", fResp)
+	ds.logger.Debug("received upstream startup message", "msg", fResp)
 
 	switch fResp := fResp.(type) {
 	case *pgproto3.AuthenticationOk:
@@ -195,13 +195,13 @@ func handlePostgresStartup(s *Server, ds *DownstreamConnEntry, us *UpstreamConnE
 			return ErrExpectedClose
 		}
 
-		slog.Error("failed to receive password response", "err", err.Error())
+		ds.logger.Error("failed to receive password response", "err", err.Error())
 		return err
 	}
 
 	switch resp := resp.(type) {
 	case *pgproto3.PasswordMessage:
-		slog.Debug("received password response", "payload", resp)
+		ds.logger.Debug("received password response", "msg", resp)
 		ds.Password = resp.Password
 	}
 
@@ -210,16 +210,16 @@ func handlePostgresStartup(s *Server, ds *DownstreamConnEntry, us *UpstreamConnE
 	// Forward password to upstream
 	err = us.Send(resp)
 	if err != nil {
-		slog.Error("failed to upstream password", "err", err.Error())
+		ds.logger.Error("failed to upstream password", "err", err.Error())
 		return err
 	}
 
 	fResp, err = us.F.Receive()
 	if err != nil {
-		slog.Error("failed to receive upstream password response", "err", err.Error())
+		ds.logger.Error("failed to receive upstream password response", "err", err.Error())
 		return err
 	}
-	slog.Debug("received upstream password response", "payload", fResp)
+	ds.logger.Debug("received upstream password response", "msg", fResp)
 
 	ds.Send(fResp)
 	return nil

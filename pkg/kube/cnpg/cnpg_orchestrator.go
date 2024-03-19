@@ -30,6 +30,7 @@ var gvr = schema.GroupVersionResource{
 
 type CNPGOrchestrator struct {
 	server interfaces.Server
+	logger *slog.Logger
 
 	dynamicClient  *dynamic.DynamicClient
 	dynamicFactory dynamicinformer.DynamicSharedInformerFactory
@@ -44,6 +45,7 @@ func New(server interfaces.Server) *CNPGOrchestrator {
 	c := &CNPGOrchestrator{
 		server:        server,
 		dynamicClient: dynamicClient,
+		logger:        slog.With("orch", "cnpg"),
 	}
 
 	c.dynamicFactory = dynamicinformer.NewDynamicSharedInformerFactory(dynamicClient, time.Minute*5)
@@ -55,29 +57,29 @@ func New(server interfaces.Server) *CNPGOrchestrator {
 			oldName, _, _ := unstructured.NestedString(oldO.Object, "metadata", "name")
 			oldNs, _, err := unstructured.NestedString(oldO.Object, "metadata", "namespace")
 			if err != nil {
-				slog.Error("failed to get name/ns", "err", err)
+				c.logger.Error("failed to get name/ns", "err", err)
 				return
 			}
 			if oldName != os.Getenv("CNPG_CLUSTER_NAME") || oldNs != os.Getenv("CNPG_NAMESPACE") {
-				slog.Debug("ignoring update, not configured name/ns", "name", oldName, "ns", oldNs)
+				c.logger.Debug("ignoring update, not configured name/ns", "name", oldName, "ns", oldNs)
 				return
 			}
 
 			oldPhase, ok, err := unstructured.NestedString(oldO.Object, "status", "phase")
 			if !ok || err != nil {
-				slog.Error("failed to get old phase", "ok", ok, "err", err)
+				c.logger.Error("failed to get old phase", "ok", ok, "err", err)
 				return
 			}
 			newO := newObj.(*unstructured.Unstructured)
 			newPhase, ok, err := unstructured.NestedString(newO.Object, "status", "phase")
 			if !ok || err != nil {
-				slog.Error("failed to get new phase", "ok", ok, "err", err)
+				c.logger.Error("failed to get new phase", "ok", ok, "err", err)
 				return
 			}
 			if oldPhase == newPhase {
 				return
 			}
-			slog.Info("phase change", "old", oldPhase, "new", newPhase)
+			c.logger.Info("phase change", "old", oldPhase, "new", newPhase)
 			if oldPhase != PhaseWaitingForUserAction && newPhase == PhaseWaitingForUserAction {
 				c.server.InitiateSwitch()
 			}

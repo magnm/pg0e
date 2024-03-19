@@ -15,14 +15,16 @@ type UpstreamConnEntry struct {
 	F           *pgproto3.Frontend
 	isClosing   bool
 	isSwitching bool
+	logger      *slog.Logger
 }
 
 type UpstreamMessageHandler func(pgproto3.BackendMessage) error
 
 func NewUpstreamEntry(conn net.Conn) *UpstreamConnEntry {
 	return &UpstreamConnEntry{
-		C: NewConn(conn),
-		F: pgproto3.NewFrontend(conn, conn),
+		C:      NewConn(conn),
+		F:      pgproto3.NewFrontend(conn, conn),
+		logger: slog.With("conn", "upstream", "addr", conn.RemoteAddr().String()),
 	}
 }
 
@@ -37,7 +39,7 @@ func (u *UpstreamConnEntry) CloseForSwitch() error {
 }
 
 func (u *UpstreamConnEntry) Listen(handler UpstreamMessageHandler) {
-	slog.Debug("upstream listening", "addr", u.Conn.RemoteAddr().String())
+	u.logger.Debug("upstream listening")
 	for {
 		msg, err := u.F.Receive()
 		if err != nil {
@@ -56,13 +58,13 @@ func (u *UpstreamConnEntry) Listen(handler UpstreamMessageHandler) {
 		switch msg := msg.(type) {
 		case *pgproto3.ErrorResponse:
 			if msg.Severity == "FATAL" && slices.Contains([]string{"57P01", "57P02", "57P03"}, msg.Code) {
-				slog.Debug("upstream is terminating, dropping message")
+				u.logger.Debug("upstream is terminating, dropping message")
 				continue
 			}
 		}
 
 		if err := handler(msg); err != nil {
-			slog.Error("upstream message handler error", "err", err.Error())
+			u.logger.Error("upstream message handler error", "err", err.Error())
 			u.Term <- err
 			return
 		}
@@ -81,7 +83,7 @@ func (u *UpstreamConnEntry) Startup(d *DownstreamConnEntry) error {
 func (u *UpstreamConnEntry) Replay(d *DownstreamConnEntry) error {
 	for query := range d.Queries().Each() {
 		query := query.Value
-		slog.Debug("replaying session query", "query", query.Query)
+		u.logger.Debug("replaying session query", "query", query.Query)
 		switch query.Kind {
 		case Prepare, Set, Listen:
 			if err := u.Send(&pgproto3.Query{String: query.Query}); err != nil {

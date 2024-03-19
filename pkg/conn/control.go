@@ -57,7 +57,7 @@ func (c *Control) AttachPreparationLock() {
 	}
 	_, err := c.Conn.Exec(context.Background(), "select pg_catalog.pg_advisory_lock_shared($1)", LOCK_ID)
 	if err != nil {
-		slog.Error("error acquiring lock", "err", err.Error())
+		slog.Error("error acquiring control lock", "err", err.Error())
 	}
 }
 
@@ -67,7 +67,7 @@ func (c *Control) ReleasePreparationLock() {
 	}
 	_, err := c.Conn.Exec(context.Background(), "select pg_catalog.pg_advisory_unlock_all()")
 	if err != nil {
-		slog.Error("error releasing lock", "err", err.Error())
+		slog.Error("error releasing control lock", "err", err.Error())
 	}
 }
 
@@ -101,4 +101,14 @@ func (c *Control) AcquireExclusivity() error {
 		return ErrFailedExclusivity
 	}
 	return nil
+}
+
+func (c *Control) WaitForDisconnect() {
+	if c.Conn == nil {
+		return
+	}
+	_, err := c.Conn.Exec(context.Background(), "select pg_sleep(15)")
+	if err != nil {
+		slog.Info("control disconnected", "err", err.Error())
+	}
 }

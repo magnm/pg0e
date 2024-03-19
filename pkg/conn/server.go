@@ -19,7 +19,9 @@ import (
 )
 
 type Server struct {
-	l net.Listener
+	l         net.Listener
+	paused    bool
+	onUnpause chan bool
 
 	upMap   UpToDownMap
 	downMap DownToUpMap
@@ -29,9 +31,10 @@ type Server struct {
 
 func New(listener net.Listener) *Server {
 	return &Server{
-		l:       listener,
-		upMap:   make(UpToDownMap),
-		downMap: make(DownToUpMap),
+		l:         listener,
+		upMap:     make(UpToDownMap),
+		downMap:   make(DownToUpMap),
+		onUnpause: make(chan bool, 1),
 	}
 }
 
@@ -100,6 +103,12 @@ func (s *Server) InitiateSwitch() {
 	control.AttachPreparationLock()
 	timeStart := time.Now()
 
+	s.paused = true
+	defer func() {
+		s.paused = false
+		s.onUnpause <- true
+	}()
+
 	pauseCb := make(chan bool, len(s.downMap))
 	for _, ds := range s.upMap {
 		ds.Pause(pauseCb)
@@ -133,8 +142,8 @@ func (s *Server) InitiateSwitch() {
 	// otherwise sleep until 2s. Just to try to make sure all
 	// other clients have had a chance to prepare.
 	totalTime := time.Since(timeStart)
-	if totalTime < 2*time.Second {
-		time.Sleep(2*time.Second - totalTime)
+	if totalTime < time.Second {
+		time.Sleep(time.Second - totalTime)
 	}
 
 	control.ReleasePreparationLock()
@@ -156,6 +165,12 @@ func (s *Server) InitiateSwitch() {
 	if err := s.orchestrator.TriggerSwitchover(); err != nil {
 		slog.Error("failed to trigger switchover", "err", err.Error())
 	}
+
+	// When control gets disconnected, the switch will be in progress
+	// and other upstreams won't be able to connect until new primary is up.
+	// So when we exit this function, s.paused will go false and general
+	// functionality will resume, with upstreams attempting to reconnect.
+	control.WaitForDisconnect()
 }
 
 func (s *Server) UnpauseAll() {
@@ -168,6 +183,10 @@ func (s *Server) handleConn(downstreamConn net.Conn) {
 	downstream := NewDownstreamEntry(downstreamConn)
 	defer downstream.Close()
 	slog.Info("new downstream", "addr", downstreamConn.RemoteAddr().String())
+
+	if s.paused {
+		<-s.onUnpause
+	}
 
 	upstream := startUpstream(0)
 	if upstream == nil {

@@ -2,8 +2,10 @@ package local
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/magnm/pg0e/pkg/interfaces"
@@ -12,6 +14,7 @@ import (
 type LocalOrchestrator struct {
 	app    *fiber.App
 	server interfaces.Server
+	logger *slog.Logger
 }
 
 func NewLocalOrchestrator(server interfaces.Server) *LocalOrchestrator {
@@ -31,6 +34,7 @@ func NewLocalOrchestrator(server interfaces.Server) *LocalOrchestrator {
 	return &LocalOrchestrator{
 		app:    app,
 		server: server,
+		logger: slog.With("orch", "local"),
 	}
 }
 
@@ -52,5 +56,7 @@ func (l *LocalOrchestrator) GetServer() interfaces.Server {
 }
 
 func (l *LocalOrchestrator) TriggerSwitchover() error {
-	return exec.Command("sudo", "systemctl", "restart", "postgresql").Run()
+	exec.Command("sudo", "systemctl", "stop", "postgresql").Run()
+	time.Sleep(5 * time.Second)
+	return exec.Command("sudo", "systemctl", "start", "postgresql").Run()
 }

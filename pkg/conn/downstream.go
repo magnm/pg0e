@@ -23,6 +23,7 @@ type DownstreamConnEntry struct {
 	inflight       *util.SyncedList[*Inflight]
 	sessionQueries *util.SyncedList[*SessionQ]
 	instrument     *DownstreamInstrument
+	logger         *slog.Logger
 
 	shouldPause   bool
 	paused        bool
@@ -81,6 +82,7 @@ func NewDownstreamEntry(conn net.Conn) *DownstreamConnEntry {
 			Id:          uuid.NewString(),
 			UniqQueries: make(map[uint32]bool),
 		},
+		logger: slog.With("addr", conn.RemoteAddr().String(), "conn", "downstream"),
 	}
 }
 
@@ -88,7 +90,7 @@ func (d *DownstreamConnEntry) Close() error {
 	return d.Conn.Close()
 }
 func (d *DownstreamConnEntry) Listen(handler DownstreamMessageHandler) {
-	slog.Debug("downstream listening", "addr", d.Conn.RemoteAddr().String())
+	d.logger.Debug("downstream listening")
 	for {
 		msg, err := d.B.Receive()
 		if err != nil {
@@ -101,14 +103,14 @@ func (d *DownstreamConnEntry) Listen(handler DownstreamMessageHandler) {
 			if d.onPaused != nil {
 				d.onPaused <- true
 			}
-			slog.Debug("downstream paused", "immediate", false)
+			d.logger.Debug("downstream paused", "immediate", false)
 			<-d.onUnpause
 			d.paused = false
-			slog.Debug("downstream unpaused")
+			d.logger.Debug("downstream unpaused")
 		}
 
 		if err := handler(msg); err != nil {
-			slog.Error("downstream message handler error", "err", err.Error())
+			d.logger.Error("downstream message handler error", "err", err.Error())
 			d.Term <- err
 			return
 		}
@@ -149,7 +151,7 @@ func (d *DownstreamConnEntry) Pause(cb chan<- bool) {
 		d.onUnpause = make(chan bool, 1)
 		d.shouldPause = true
 		if !d.State.Tx && d.readyForQuery {
-			slog.Debug("downstream paused", "immediate", true)
+			d.logger.Debug("downstream paused", "immediate", true)
 			d.paused = true
 			if cb != nil {
 				cb <- true
@@ -160,11 +162,11 @@ func (d *DownstreamConnEntry) Pause(cb chan<- bool) {
 
 		// Ensure that downstream is not paused too long no matter what
 		go func() {
-			timeout := time.After(10 * time.Second)
+			timeout := time.After(12 * time.Second)
 			select {
 			case <-timeout:
 				if d.shouldPause || d.paused {
-					slog.Warn("downstream pause timeout")
+					d.logger.Warn("downstream pause timeout")
 					d.Resume()
 				}
 			case <-d.onUnpause:
@@ -181,7 +183,7 @@ func (d *DownstreamConnEntry) IsPaused() bool {
 }
 
 func (d *DownstreamConnEntry) Resume() {
-	slog.Debug("downstream resuming")
+	d.logger.Debug("downstream resuming")
 	if d.shouldPause {
 		d.shouldPause = false
 		d.onUnpause <- true
@@ -217,7 +219,7 @@ func (d *DownstreamConnEntry) AnalyzeMsg(msg pgproto3.Message) {
 }
 
 func (d *DownstreamConnEntry) AnalyzeRequestMsg(msg pgproto3.FrontendMessage) {
-	slog.Debug("downstream req", "payload", msg)
+	d.logger.Debug("downstream req", "payload", msg)
 
 	switch msg := (msg).(type) {
 	case *pgproto3.Query:
@@ -228,26 +230,27 @@ func (d *DownstreamConnEntry) AnalyzeRequestMsg(msg pgproto3.FrontendMessage) {
 
 		query, err := pg_query.Parse(msg.String)
 		if err != nil {
-			slog.Warn("failed to parse query", "err", err.Error(), "query", msg.String)
+			d.logger.Warn("failed to parse query", "err", err.Error(), "query", msg.String)
 			return
 		}
 		persistable := parsePersistableQueries(query.Stmts)
 		if len(persistable) > 0 {
-			slog.Debug("query persistable", "persistable", persistable)
+			d.logger.Debug("query persistable", "persistable", persistable)
 			for _, persist := range persistable {
 				d.inflight.Add(&Inflight{Query: &persist})
 			}
 		}
 	case *pgproto3.Parse:
+		d.readyForQuery = false
 		if msg.Name == "" {
 			query, err := pg_query.Parse(msg.Query)
 			if err != nil {
-				slog.Warn("failed to parse parse-query", "err", err.Error(), "query", msg.Query)
+				d.logger.Warn("failed to parse parse-query", "err", err.Error(), "query", msg.Query)
 				return
 			}
 			persistable := parsePersistableQueries(query.Stmts)
 			if len(persistable) > 0 {
-				slog.Debug("parsed persistable", "persistable", persistable)
+				d.logger.Debug("parsed persistable", "persistable", persistable)
 				for _, persist := range persistable {
 					d.inflight.Add(&Inflight{Query: &persist})
 				}
@@ -265,7 +268,7 @@ func (d *DownstreamConnEntry) AnalyzeRequestMsg(msg pgproto3.FrontendMessage) {
 }
 
 func (d *DownstreamConnEntry) AnalyzeResponseMsg(msg pgproto3.BackendMessage) {
-	slog.Debug("upstream resp", "payload", msg)
+	d.logger.Debug("upstream resp", "payload", msg)
 
 	switch msg.(type) {
 	case *pgproto3.ReadyForQuery:
@@ -290,7 +293,7 @@ func (d *DownstreamConnEntry) AnalyzeResponseMsg(msg pgproto3.BackendMessage) {
 		d.finalizeInflight()
 		metrics.IncQueryRecv(d.instrument.Id)
 		metrics.RecQueryTime(time.Since(d.instrument.QueryStart).Seconds())
-		slog.Debug("query time", "duration", time.Since(d.instrument.QueryStart).Seconds())
+		d.logger.Debug("query time", "duration", time.Since(d.instrument.QueryStart).Seconds())
 
 	case *pgproto3.ErrorResponse:
 		d.inflight.Clear()
@@ -323,7 +326,7 @@ func (d *DownstreamConnEntry) finalizeInflight() {
 			}
 		}
 	}
-	slog.Debug("downstream current", "state", d.State, "sessionQueries", d.sessionQueries.UnsafeList())
+	d.logger.Debug("downstream current", "state", d.State, "sessionQueries", d.sessionQueries.UnsafeList())
 }
 
 func deparse(node *pg_query.Node) (string, error) {
