@@ -209,7 +209,7 @@ func (d *DownstreamConnEntry) AnalyzeMsg(msg pgproto3.Message) {
 
 func (d *DownstreamConnEntry) AnalyzeRequestMsg(msg pgproto3.FrontendMessage) {
 	instrTimeStart := time.Now()
-	slog.Debug("downstream req", "msg", msg)
+	slog.Debug("downstream req", "payload", msg)
 
 	switch msg := (msg).(type) {
 	case *pgproto3.Query:
@@ -264,7 +264,7 @@ func (d *DownstreamConnEntry) AnalyzeResponseMsg(msg pgproto3.BackendMessage) {
 	}
 
 	instrTimeStart := time.Now()
-	slog.Debug("upstream resp", "msg", msg)
+	slog.Debug("upstream resp", "payload", msg)
 
 	switch msg.(type) {
 	case *pgproto3.ReadyForQuery:

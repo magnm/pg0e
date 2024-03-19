@@ -73,7 +73,7 @@ require (
 )
 
 require (
-	github.com/gofiber/fiber/v2 v2.52.0
+	github.com/gofiber/fiber/v2 v2.52.2
 	go.opentelemetry.io/otel/exporters/prometheus v0.46.0
 	go.opentelemetry.io/otel/metric v1.24.0
 	google.golang.org/protobuf v1.32.0 // indirect
