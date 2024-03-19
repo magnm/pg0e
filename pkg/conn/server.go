@@ -164,13 +164,13 @@ func (s *Server) InitiateSwitch() {
 
 	if err := s.orchestrator.TriggerSwitchover(); err != nil {
 		slog.Error("failed to trigger switchover", "err", err.Error())
+	} else {
+		// When control gets disconnected, the switch will be in progress
+		// and other upstreams won't be able to connect until new primary is up.
+		// So when we exit this function, s.paused will go false and general
+		// functionality will resume, with upstreams attempting to reconnect.
+		control.WaitForDisconnect()
 	}
-
-	// When control gets disconnected, the switch will be in progress
-	// and other upstreams won't be able to connect until new primary is up.
-	// So when we exit this function, s.paused will go false and general
-	// functionality will resume, with upstreams attempting to reconnect.
-	control.WaitForDisconnect()
 }
 
 func (s *Server) UnpauseAll() {
